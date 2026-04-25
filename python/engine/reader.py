@@ -364,12 +364,71 @@ class RadarReader:
         except (ValueError, KeyError, AttributeError) as exc:
             logger.debug("Could not extract root attributes: %s", exc)
 
+        # Extract radar site coordinates from coords/data_vars/attrs
+        # xradar stores these as coordinate variables, not always as attrs
+        if "latitude" not in root_attrs or "longitude" not in root_attrs:
+            lat, lon = self._extract_site_coords(dtree, sweep_nodes)
+            if lat is not None:
+                root_attrs["latitude"] = lat
+            if lon is not None:
+                root_attrs["longitude"] = lon
+
         return {
             "variables": sorted(variables),
             "dimensions": dimensions,
             "attributes": root_attrs,
             "sweeps": sweeps,
         }
+
+    @staticmethod
+    def _extract_site_coords(
+        dtree: Any, sweep_nodes: list[Any]
+    ) -> tuple[float | None, float | None]:
+        """Try to find radar site lat/lon from the DataTree."""
+        lat: float | None = None
+        lon: float | None = None
+
+        lat_keys = ("latitude", "origin_latitude", "siteLat")
+        lon_keys = ("longitude", "origin_longitude", "siteLon")
+
+        # 1. Check root dataset coords and data_vars
+        try:
+            root_ds = dtree.to_dataset()
+            for k in lat_keys:
+                if k in root_ds.coords:
+                    lat = float(root_ds.coords[k].values)
+                    break
+                if k in root_ds:
+                    lat = float(root_ds[k].values)
+                    break
+            for k in lon_keys:
+                if k in root_ds.coords:
+                    lon = float(root_ds.coords[k].values)
+                    break
+                if k in root_ds:
+                    lon = float(root_ds[k].values)
+                    break
+        except Exception:
+            pass
+
+        # 2. Fallback: check first sweep's coords
+        if (lat is None or lon is None) and sweep_nodes:
+            try:
+                ds0 = sweep_nodes[0].to_dataset()
+                for k in lat_keys:
+                    if lat is None and k in ds0.coords:
+                        lat = float(ds0.coords[k].values)
+                    if lat is None and k in ds0:
+                        lat = float(ds0[k].values)
+                for k in lon_keys:
+                    if lon is None and k in ds0.coords:
+                        lon = float(ds0.coords[k].values)
+                    if lon is None and k in ds0:
+                        lon = float(ds0[k].values)
+            except Exception:
+                pass
+
+        return lat, lon
 
     def get_sweep_data(self, sweep: int, variable: str) -> xr.DataArray:
         """Return the DataArray for a specific sweep index and variable.

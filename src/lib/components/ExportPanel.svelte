@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount, onDestroy } from 'svelte';
   import {
     radarData,
     exportNotification,
@@ -47,26 +48,41 @@
   $: isConnected = $connectionStatus === 'connected';
   $: canExport = hasData && isConnected && !isExporting;
 
-  // Update animation sweep range when sweeps change
-  $: if ($radarData.sweeps.length > 0) {
-    animSweepEnd = $radarData.sweeps.length - 1;
-  }
+  let unsubRadar: (() => void) | null = null;
+  let unsubProgress: (() => void) | null = null;
+  let unsubNotification: (() => void) | null = null;
 
-  // Track progress
-  $: if ($processingProgress) {
-    progressPercent = $processingProgress.percent;
-    progressMessage = $processingProgress.message;
-    if ($processingProgress.percent >= 100) {
-      setTimeout(() => { isExporting = false; }, 1000);
-    }
-  }
+  onMount(() => {
+    unsubRadar = radarData.subscribe((rd) => {
+      if (rd.sweeps.length > 0) {
+        animSweepEnd = rd.sweeps.length - 1;
+      }
+    });
 
-  // Surface export notifications as toasts
-  $: if ($exportNotification) {
-    addToast('success', `${$exportNotification}`);
-    exportNotification.set(null);
-    isExporting = false;
-  }
+    unsubProgress = processingProgress.subscribe((p) => {
+      if (p) {
+        progressPercent = p.percent;
+        progressMessage = p.message;
+        if (p.percent >= 100) {
+          setTimeout(() => { isExporting = false; }, 1000);
+        }
+      }
+    });
+
+    unsubNotification = exportNotification.subscribe((n) => {
+      if (n) {
+        addToast('success', `${n}`);
+        exportNotification.set(null);
+        isExporting = false;
+      }
+    });
+  });
+
+  onDestroy(() => {
+    unsubRadar?.();
+    unsubProgress?.();
+    unsubNotification?.();
+  });
 
   // Batch variable/sweep selection helpers
   function toggleBatchVar(v: string) {

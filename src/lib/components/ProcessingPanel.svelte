@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount, onDestroy } from 'svelte';
   import { processingProgress, radarData, connectionStatus } from '../stores/radarData';
   import { wsManager } from '../utils/websocket';
   import CollapsiblePanel from './CollapsiblePanel.svelte';
@@ -37,32 +38,45 @@
   const variables = $derived($radarData.variables);
   const sweeps = $derived($radarData.sweeps || []);
 
-  // Set default variable/sweep when data changes
-  $effect(() => {
-    if (variables.length > 0 && !statVariable) {
-      statVariable = variables[0];
-    }
-  });
+  let unsubRadar: (() => void) | null = null;
+  let unsubConnection: (() => void) | null = null;
+  let retrievalsFetched = false;
 
-  // Fetch retrievals list when connected and data loaded
-  $effect(() => {
-    if (canProcess && retrievals.length === 0) {
-      fetchRetrievals();
-    }
-  });
-
-  // Update retrieval params when selection changes
-  $effect(() => {
-    if (selectedRetrieval) {
-      const def = retrievals.find(r => r.name === selectedRetrieval);
-      if (def) {
-        retrievalParams = {};
-        for (const [key, spec] of Object.entries(def.params)) {
-          retrievalParams[key] = spec.default;
-        }
+  function updateRetrievalParams(name: string) {
+    const def = retrievals.find(r => r.name === name);
+    if (def) {
+      retrievalParams = {};
+      for (const [key, spec] of Object.entries(def.params)) {
+        retrievalParams[key] = spec.default;
       }
     }
+  }
+
+  onMount(() => {
+    unsubRadar = radarData.subscribe((rd) => {
+      if (rd.variables.length > 0 && !statVariable) {
+        statVariable = rd.variables[0];
+      }
+      tryFetchRetrievals();
+    });
+    unsubConnection = connectionStatus.subscribe(() => {
+      tryFetchRetrievals();
+    });
   });
+
+  onDestroy(() => {
+    unsubRadar?.();
+    unsubConnection?.();
+  });
+
+  function tryFetchRetrievals() {
+    const rd = $radarData;
+    const conn = $connectionStatus;
+    if (rd.variables.length > 0 && conn === 'connected' && !retrievalsFetched) {
+      retrievalsFetched = true;
+      fetchRetrievals();
+    }
+  }
 
   function fetchRetrievals() {
     wsManager.send({ type: 'list_retrievals' });
@@ -204,7 +218,7 @@
     <div class="controls">
       <div class="field">
         <label for="retrieval-select">Algorithm</label>
-        <select id="retrieval-select" bind:value={selectedRetrieval} disabled={!canProcess || retrievalRunning}>
+        <select id="retrieval-select" bind:value={selectedRetrieval} disabled={!canProcess || retrievalRunning} on:change={() => updateRetrievalParams(selectedRetrieval)}>
           {#each retrievals as ret}
             <option value={ret.name}>{ret.description}</option>
           {/each}

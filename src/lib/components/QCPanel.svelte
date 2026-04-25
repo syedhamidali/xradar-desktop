@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount, onDestroy } from 'svelte';
   import { radarData, connectionStatus, selectedVariable, selectedSweep, processingProgress } from '../stores/radarData';
   import { wsManager } from '../utils/websocket';
   import CollapsiblePanel from './CollapsiblePanel.svelte';
@@ -51,22 +52,34 @@
   const currentVariable = $derived($selectedVariable);
   const currentSweep = $derived($selectedSweep);
 
-  // Fetch QC algorithms when connected and data loaded
-  $effect(() => {
-    if (hasData && isConnected && algorithms.length === 0) {
-      fetchAlgorithms();
-    }
+  let unsubRadar: (() => void) | null = null;
+  let unsubConnection: (() => void) | null = null;
+  let algorithmsFetched = false;
+
+  onMount(() => {
+    // Load presets from localStorage once
+    try {
+      const saved = localStorage.getItem('xradar-qc-presets');
+      if (saved) presets = JSON.parse(saved);
+    } catch { /* ignore */ }
+
+    unsubRadar = radarData.subscribe(() => tryFetchAlgorithms());
+    unsubConnection = connectionStatus.subscribe(() => tryFetchAlgorithms());
   });
 
-  // Load presets from localStorage
-  $effect(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('xradar-qc-presets');
-        if (saved) presets = JSON.parse(saved);
-      } catch { /* ignore */ }
-    }
+  onDestroy(() => {
+    unsubRadar?.();
+    unsubConnection?.();
   });
+
+  function tryFetchAlgorithms() {
+    const rd = $radarData;
+    const conn = $connectionStatus;
+    if (rd.variables.length > 0 && conn === 'connected' && !algorithmsFetched) {
+      algorithmsFetched = true;
+      fetchAlgorithms();
+    }
+  }
 
   function fetchAlgorithms() {
     wsManager.send({ type: 'list_qc_algorithms' });

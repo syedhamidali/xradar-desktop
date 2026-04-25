@@ -40,37 +40,30 @@
   // Vertical profile state
   let vpVariables = $state<string[]>([]);
 
-  // Initialize CS variable to match selected variable
-  $effect(() => {
-    if (variable && !csVariable) {
-      csVariable = variable;
-      csCmap = getDefaultCmap(variable);
-      const range = getDefaultRange(variable);
-      if (range) { csVmin = range[0]; csVmax = range[1]; }
-    }
-  });
+  let unsubVar: (() => void) | null = null;
 
-  // When CS variable changes, update colormap
-  $effect(() => {
-    if (csVariable) {
-      csCmap = getDefaultCmap(csVariable);
-      const range = getDefaultRange(csVariable);
-      if (range) { csVmin = range[0]; csVmax = range[1]; }
-    }
-  });
-
-  // VP multi-select: default to current variable
-  $effect(() => {
-    if (variable && vpVariables.length === 0) {
-      vpVariables = [variable];
-    }
-  });
+  function updateCsDefaults(v: string) {
+    csCmap = getDefaultCmap(v);
+    const range = getDefaultRange(v);
+    if (range) { csVmin = range[0]; csVmax = range[1]; }
+  }
 
   // WebSocket message handlers
   let unsubCS: (() => void) | null = null;
   let unsubVP: (() => void) | null = null;
 
   onMount(() => {
+    // Initialize CS variable from current selection
+    unsubVar = selectedVariable.subscribe((v) => {
+      if (v && !csVariable) {
+        csVariable = v;
+        updateCsDefaults(v);
+      }
+      if (v && vpVariables.length === 0) {
+        vpVariables = [v];
+      }
+    });
+
     unsubCS = wsManager.onMessage('cross_section_result', (msg: any) => {
       const data: CrossSectionData = {
         distance_km: msg.distance_km ?? [],
@@ -112,6 +105,7 @@
   onDestroy(() => {
     unsubCS?.();
     unsubVP?.();
+    unsubVar?.();
   });
 
   function setTab(tab: 'cross-section' | 'vertical-profile') {
@@ -229,7 +223,7 @@
         <div class="csp-controls">
           <div class="csp-row">
             <label class="csp-label">Variable</label>
-            <select class="csp-select" bind:value={csVariable} disabled={!hasData}>
+            <select class="csp-select" bind:value={csVariable} disabled={!hasData} on:change={() => updateCsDefaults(csVariable)}>
               {#each variables as v}
                 <option value={v}>{v}</option>
               {/each}

@@ -54,7 +54,7 @@
 
   // Map / geo overlay
   let showMap = $state(true);
-  let mapOpacity = $state(0.6);
+  let mapOpacity = $state(1.0);
   let showGeoOverlay = $state(true);
 
   // Measurement / annotation mode

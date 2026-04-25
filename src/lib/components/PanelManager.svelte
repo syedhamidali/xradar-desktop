@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount, onDestroy } from 'svelte';
   import { workspaceStore, currentWorkspace } from '../stores/workspace';
   import ProcessingPanel from './ProcessingPanel.svelte';
   import ExportPanel from './ExportPanel.svelte';
@@ -8,7 +9,6 @@
   import CrossSectionPanel from './CrossSectionPanel.svelte';
   import VolumePanel from './VolumePanel.svelte';
 
-  // Panel registry
   const PANEL_MAP: Record<string, { component: any; label: string; icon: string }> = {
     volume: { component: VolumePanel, label: '3D Volume', icon: '\u{1F4E6}' },
     timeseries: { component: TimeSeriesChart, label: 'Time Series', icon: '\u{1F4C8}' },
@@ -24,12 +24,19 @@
   let dragTarget = $state<string | null>(null);
   let dragOverTarget = $state<string | null>(null);
 
-  $effect(() => {
-    const ws = $currentWorkspace;
-    panelOrder = ws.rightPanelOrder?.length
-      ? ws.rightPanelOrder.filter((id: string) => PANEL_MAP[id])
-      : Object.keys(PANEL_MAP);
-    panelCollapsed = ws.rightPanelCollapsed ?? {};
+  let unsubWorkspace: (() => void) | null = null;
+
+  onMount(() => {
+    unsubWorkspace = currentWorkspace.subscribe((ws) => {
+      panelOrder = ws.rightPanelOrder?.length
+        ? ws.rightPanelOrder.filter((id: string) => PANEL_MAP[id])
+        : Object.keys(PANEL_MAP);
+      panelCollapsed = ws.rightPanelCollapsed ?? {};
+    });
+  });
+
+  onDestroy(() => {
+    unsubWorkspace?.();
   });
 
   function toggleCollapse(id: string) {
