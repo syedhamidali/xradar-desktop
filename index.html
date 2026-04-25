@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>xradar desktop</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script>
+      window.addEventListener('error', function(e) {
+        document.title = 'JS ERROR: ' + e.message;
+        console.error('[GLOBAL ERROR]', e.message, e.filename, e.lineno);
+      });
+      window.addEventListener('unhandledrejection', function(e) {
+        document.title = 'PROMISE ERROR: ' + (e.reason?.message || e.reason);
+        console.error('[UNHANDLED REJECTION]', e.reason);
+      });
+    </script>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,930 @@
+<script lang="ts">
+  import { onMount, onDestroy, tick } from 'svelte';
+  import { radarData, selectedVariable, selectedSweep, connectionStatus } from '../stores/radarData';
+  import { wsManager } from '../utils/websocket';
+  import { PPIRenderer, getCachedSweep, getDefaultCmap, getDefaultRange, type SweepDataEntry } from '../utils/ppiRenderer';
+  import ColorBar from './ColorBar.svelte';
+  import StormOverlay from './StormOverlay.svelte';
+  import MapBackground from './MapBackground.svelte';
+  import GeoOverlay from './GeoOverlay.svelte';
+  import MeasureTools from './MeasureTools.svelte';
+  import Annotations from './Annotations.svelte';
+  import MeasureToolbar from './MeasureToolbar.svelte';
+  import { annotationsStore, addPendingPoint, finishAreaMeasurement, setMeasureMode, setAnnotationMode } from '../stores/annotations';
+  import { crossSectionStore, type CrossSectionLinePoints } from '../stores/crossSection';
+  import CrossSectionLine from './CrossSectionLine.svelte';
+  import { setProbePoint } from '../stores/temporal';
+  import PerformanceMonitor from './PerformanceMonitor.svelte';
+  import BoxSelectTool from './BoxSelectTool.svelte';
+  import { boxSelectActive, selectedBox } from '../stores/volumeSelect';
+  import type { SweepInfo } from '../stores/radarData';
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  let isLoading = $state(false);
+  let hasRendered = $state(false);
+
+  // Container sizing
+  let canvasEl: HTMLDivElement;
+  let webglCanvas: HTMLCanvasElement;
+  let resizeObserver: ResizeObserver | null = null;
+  let containerWidth = $state(800);
+  let containerHeight = $state(600);
+
+  // Zoom / pan state
+  let scale = $state(1);
+  let translateX = $state(0);
+  let translateY = $state(0);
+  let isDragging = $state(false);
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let dragStartTX = 0;
+  let dragStartTY = 0;
+
+  // Coordinate overlay
+  let showCoords = $state(false);
+  let coordRange = $state(0);
+  let coordAzimuth = $state(0);
+
+  // Current data info
+  let currentVmin = $state(0);
+  let currentVmax = $state(1);
+  let currentUnits = $state('');
+  let currentMaxRange = $state(1);
+  let currentCmap = $state('turbo');
+
+  // Map / geo overlay
+  let showMap = $state(true);
+  let mapOpacity = $state(0.6);
+  let showGeoOverlay = $state(true);
+
+  // Measurement / annotation mode
+  let measureToolsVisible = $state(false);
+  const measureActive = $derived($annotationsStore.measureMode !== 'none' || $annotationsStore.annotationMode !== 'none');
+
+  // Cross-section / vertical-profile tool state
+  const csLineToolActive = $derived($crossSectionStore.lineToolActive);
+  const csProbeToolActive = $derived($crossSectionStore.probeToolActive);
+
+  // Value probe
+  let probeActive = $state(false);
+  let probeValue: number | null = $state(null);
+  let probeX = $state(0);
+  let probeY = $state(0);
+  let currentEntry: SweepDataEntry | null = $state(null);
+
+  // WebGL renderer
+  let ppi: PPIRenderer | null = $state(null);
+  let unsubSweepData: (() => void) | null = null;
+
+  // ── Derived state ─────────────────────────────────────────────────────────
+  const variables = $derived($radarData.variables);
+  const sweeps = $derived($radarData.sweeps);
+  const variable = $derived($selectedVariable);
+  const sweep = $derived($selectedSweep);
+  const hasData = $derived($radarData.filePath !== null || $radarData.variables.length > 0);
+  const isConnected = $derived($connectionStatus === 'connected');
+  const zoomLabel = $derived(Math.round(scale * 100) + '%');
+
+  // Radar site location from file attributes
+  const radarLat = $derived(parseFloat($radarData.attributes?.latitude ?? $radarData.attributes?.origin_latitude ?? '0') || 0);
+  const radarLon = $derived(parseFloat($radarData.attributes?.longitude ?? $radarData.attributes?.origin_longitude ?? '0') || 0);
+  const radarName = $derived(($radarData.attributes?.instrument_name ?? $radarData.attributes?.station_name ?? '') as string);
+
+  // Re-render when map toggle changes (to update transparent background)
+  let _rvRenderCount = 0;
+  $effect(() => {
+    _rvRenderCount++;
+    if (_rvRenderCount > 5) console.warn('[DEBUG] RadarViewer render effect:', _rvRenderCount);
+    if (hasRendered) {
+      void showMap;
+      renderFrame();
+    }
+  });
+
+  // Request sweep data when variable or sweep changes
+  let prevRequestKey = '';
+  let _rvRequestCount = 0;
+  $effect(() => {
+    _rvRequestCount++;
+    if (_rvRequestCount > 5) console.warn('[DEBUG] RadarViewer request effect:', _rvRequestCount);
+    const key = `${variable}:${sweep}`;
+    if (variable && isConnected && key !== prevRequestKey) {
+      prevRequestKey = key;
+      // Update colormap defaults for new variable
+      currentCmap = getDefaultCmap(variable);
+      const range = getDefaultRange(variable);
+      if (range) {
+        currentVmin = range[0];
+        currentVmax = range[1];
+      }
+      // Check cache first
+      const cached = getCachedSweep(variable, sweep);
+      if (cached) {
+        renderSweepData(cached);
+      } else {
+        isLoading = true;
+        wsManager.requestSweepData(variable, sweep);
+      }
+    }
+  });
+
+  // ── Lifecycle ────────────���────────────────────────���────────────────────────
+  onMount(() => {
+    unsubSweepData = wsManager.onMessage('sweep_data_ready', (entry: SweepDataEntry) => {
+      renderSweepData(entry);
+    });
+
+    resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          const w = Math.round(width);
+          const h = Math.round(height);
+          containerWidth = w;
+          containerHeight = h;
+          if (ppi) {
+            ppi.resize(w, h);
+            renderFrame();
+          }
+        }
+      }
+    });
+    if (canvasEl) resizeObserver.observe(canvasEl);
+  });
+
+  onDestroy(() => {
+    resizeObserver?.disconnect();
+    unsubSweepData?.();
+    ppi?.destroy();
+  });
+
+  // ── Rendering ─────────────��──────────────────────────��────────────────────
+  function initWebGL(): boolean {
+    if (ppi) return true;
+    if (!webglCanvas) return false;
+    ppi = new PPIRenderer();
+    const ok = ppi.init(webglCanvas);
+    if (!ok) {
+      console.error('[RadarViewer] WebGL init failed');
+      ppi = null;
+      return false;
+    }
+    ppi.resize(containerWidth, containerHeight);
+    return true;
+  }
+
+  async function renderSweepData(entry: SweepDataEntry) {
+    // Wait for Svelte to flush DOM updates (canvas may not exist yet if hasData just became true)
+    await tick();
+
+    // Retry WebGL init a few times — canvas may still be binding
+    let retries = 0;
+    while (!initWebGL() && retries < 5) {
+      retries++;
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+
+    if (!ppi) {
+      console.error('[RadarViewer] WebGL init failed after retries — canvas:', webglCanvas);
+      isLoading = false;
+      return;
+    }
+
+    const t0 = performance.now();
+    currentEntry = entry;
+    ppi.uploadSweepData(entry);
+    currentMaxRange = entry.maxRange;
+    currentUnits = entry.units;
+
+    // Use server-reported range as fallback if no defaults exist
+    if (!getDefaultRange(entry.variable)) {
+      currentVmin = entry.vmin;
+      currentVmax = entry.vmax;
+    }
+
+    ppi.setTransparentBackground(showMap);
+    ppi.setColormap(currentCmap);
+    ppi.setView(scale, translateX, translateY);
+    ppi.render(currentVmin, currentVmax);
+
+    isLoading = false;
+    hasRendered = true;
+    const dt = performance.now() - t0;
+    console.log(`[PPI] Rendered ${entry.variable} sweep ${entry.sweep} in ${dt.toFixed(0)}ms (${entry.nAz}x${entry.nRange} gates)`);
+  }
+
+  function renderFrame() {
+    if (!ppi || !hasRendered) return;
+    ppi.setTransparentBackground(showMap);
+    ppi.setColormap(currentCmap);
+    ppi.setView(scale, translateX, translateY);
+    ppi.render(currentVmin, currentVmax);
+  }
+
+  // ── Colormap/range callbacks ──────────────────────────────────────────────
+  function handleCmapChange(name: string) {
+    currentCmap = name;
+    renderFrame();
+  }
+
+  function handleRangeChange(newVmin: number, newVmax: number) {
+    currentVmin = newVmin;
+    currentVmax = newVmax;
+    renderFrame();
+  }
+
+  // ── Event handlers ────────────────────────��────────────────────────────────
+  function onVariableChange(e: Event) {
+    selectedVariable.set((e.target as HTMLSelectElement).value);
+  }
+
+  function onSweepChange(e: Event) {
+    selectedSweep.set(parseInt((e.target as HTMLSelectElement).value, 10));
+  }
+
+  function onWheel(e: WheelEvent) {
+    if (!hasRendered) return;
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    const newScale = Math.min(Math.max(scale * factor, 0.1), 20);
+
+    const rect = canvasEl.getBoundingClientRect();
+    const ndcX = (e.clientX - rect.left) / rect.width * 2 - 1;
+    const ndcY = 1 - (e.clientY - rect.top) / rect.height * 2;
+    const mr = currentMaxRange;
+    const aspect = rect.width / rect.height;
+
+    const sxOld = (aspect >= 1 ? scale / aspect : scale) / mr;
+    const syOld = (aspect >= 1 ? scale : scale * aspect) / mr;
+    const dataX = (ndcX - translateX * sxOld) / sxOld;
+    const dataY = (ndcY - translateY * syOld) / syOld;
+
+    const sxNew = (aspect >= 1 ? newScale / aspect : newScale) / mr;
+    const syNew = (aspect >= 1 ? newScale : newScale * aspect) / mr;
+    translateX = (ndcX - dataX * sxNew) / sxNew;
+    translateY = (ndcY - dataY * syNew) / syNew;
+    scale = newScale;
+    renderFrame();
+  }
+
+  function onMouseDown(e: MouseEvent) {
+    if (!hasRendered || e.button !== 0) return;
+    // When a measurement or annotation tool is active, clicks add points instead of dragging
+    if (measureActive) return;
+    isDragging = true;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    dragStartTX = translateX;
+    dragStartTY = translateY;
+  }
+
+  function onMouseMove(e: MouseEvent) {
+    if (!hasRendered) return;
+    updateCoords(e);
+    updateProbe(e);
+    if (!isDragging) return;
+
+    const rect = canvasEl.getBoundingClientRect();
+    const mr = currentMaxRange;
+    const aspect = rect.width / rect.height;
+    const sx = (aspect >= 1 ? scale / aspect : scale) / mr;
+    const sy = (aspect >= 1 ? scale : scale * aspect) / mr;
+    const ndcDx = (e.clientX - dragStartX) / rect.width * 2;
+    const ndcDy = -(e.clientY - dragStartY) / rect.height * 2;
+    translateX = dragStartTX + ndcDx / sx;
+    translateY = dragStartTY + ndcDy / sy;
+    renderFrame();
+  }
+
+  function onMouseUp() { isDragging = false; }
+  function onMouseLeave() { isDragging = false; showCoords = false; probeActive = false; }
+  function onMouseEnter() { if (hasRendered) showCoords = true; }
+
+  function onCanvasClick(e: MouseEvent) {
+    if (!hasRendered || e.button !== 0) return;
+    // Vertical profile probe click
+    if (csProbeToolActive) {
+      handleVPProbeClick(e);
+      return;
+    }
+    if (!measureActive) return;
+    const [xm, ym] = screenToData(e.clientX, e.clientY);
+    addPendingPoint({ x: xm, y: ym });
+  }
+
+  function onDblClick(e: MouseEvent) {
+    e.preventDefault();
+    // If area measurement is in progress, close the polygon
+    if ($annotationsStore.measureMode === 'area' && $annotationsStore.pendingPoints.length >= 3) {
+      finishAreaMeasurement();
+      return;
+    }
+    scale = 1;
+    translateX = 0;
+    translateY = 0;
+    renderFrame();
+  }
+
+  function toggleMeasureTools() {
+    measureToolsVisible = !measureToolsVisible;
+    if (!measureToolsVisible) {
+      setMeasureMode('none');
+      setAnnotationMode('none');
+    }
+  }
+
+  function onRightClick(e: MouseEvent) {
+    e.preventDefault();
+    probeActive = !probeActive;
+    if (probeActive) updateProbe(e);
+  }
+
+  function updateCoords(e: MouseEvent) {
+    if (!canvasEl || !hasRendered) return;
+    const [xm, ym] = screenToData(e.clientX, e.clientY);
+    coordRange = Math.round(Math.sqrt(xm * xm + ym * ym) / 1000);
+    coordAzimuth = Math.round(((Math.atan2(xm, ym) * 180 / Math.PI) + 360) % 360);
+    showCoords = true;
+  }
+
+  function updateProbe(e: MouseEvent) {
+    if (!probeActive || !currentEntry) return;
+    const [xm, ym] = screenToData(e.clientX, e.clientY);
+    probeX = e.clientX;
+    probeY = e.clientY;
+
+    // Find nearest gate value
+    const rng = Math.sqrt(xm * xm + ym * ym);
+    const az = ((Math.atan2(xm, ym) * 180 / Math.PI) + 360) % 360;
+
+    const entry = currentEntry;
+    // Find nearest azimuth index
+    let bestAi = 0;
+    let bestAzDist = 999;
+    for (let ai = 0; ai < entry.nAz; ai++) {
+      let d = Math.abs(entry.azimuth[ai] - az);
+      if (d > 180) d = 360 - d;
+      if (d < bestAzDist) { bestAzDist = d; bestAi = ai; }
+    }
+    // Find nearest range index
+    let bestRi = 0;
+    let bestRngDist = Infinity;
+    for (let ri = 0; ri < entry.nRange; ri++) {
+      const d = Math.abs(entry.range[ri] - rng);
+      if (d < bestRngDist) { bestRngDist = d; bestRi = ri; }
+    }
+
+    const val = entry.values[bestAi * entry.nRange + bestRi];
+    probeValue = val <= -9998 ? null : val;
+
+    // Update the temporal probe point for time series analysis
+    setProbePoint({
+      azimuth: entry.azimuth[bestAi],
+      rangeM: entry.range[bestRi],
+      x: e.clientX,
+      y: e.clientY,
+    });
+  }
+
+  // ── Cross-section / VP handlers ──────────────────────────────────────────
+  function handleCrossSectionRequest(e: CustomEvent<CrossSectionLinePoints>) {
+    const line = e.detail;
+    const variable = $selectedVariable;
+    if (!variable) return;
+    crossSectionStore.update((s) => ({ ...s, isLoading: true }));
+    wsManager.send({
+      type: 'get_cross_section',
+      start: [line.startLat, line.startLon],
+      end: [line.endLat, line.endLon],
+      variable,
+      n_points: 200,
+    });
+  }
+
+  function handleVPProbeClick(e: MouseEvent) {
+    if (!csProbeToolActive || !hasRendered) return;
+    const [xm, ym] = screenToData(e.clientX, e.clientY);
+    // Convert data coords to lat/lon
+    const lat = radarLat + ym / 110540.0;
+    const lon = radarLon + xm / (111320.0 * Math.cos(radarLat * Math.PI / 180));
+    // Dispatch VP request for the selected variable
+    const variable = $selectedVariable;
+    if (!variable) return;
+    crossSectionStore.update((s) => ({ ...s, isLoading: true, verticalProfiles: [] }));
+    wsManager.send({ type: 'get_vertical_profile', lat, lon, variable });
+  }
+
+  function screenToData(clientX: number, clientY: number): [number, number] {
+    const rect = canvasEl.getBoundingClientRect();
+    const ndcX = (clientX - rect.left) / rect.width * 2 - 1;
+    const ndcY = 1 - (clientY - rect.top) / rect.height * 2;
+    const mr = currentMaxRange;
+    const aspect = rect.width / rect.height;
+    const sx = (aspect >= 1 ? scale / aspect : scale) / mr;
+    const sy = (aspect >= 1 ? scale : scale * aspect) / mr;
+    const xm = (ndcX - translateX * sx) / sx;
+    const ym = (ndcY - translateY * sy) / sy;
+    return [xm, ym];
+  }
+</script>
+
+<PerformanceMonitor />
+
+<div class="radar-viewer">
+  {#if hasData}
+    <div class="viewer-controls">
+      <div class="control-group">
+        <label for="var-select">Variable</label>
+        <select id="var-select" value={variable ?? ''} on:change={onVariableChange}
+                disabled={!isConnected} title={!isConnected ? 'Not connected' : 'Select variable'}>
+          <option value="" disabled>Select variable</option>
+          {#each variables as v}
+            <option value={v}>{v}</option>
+          {/each}
+        </select>
+      </div>
+
+      <div class="control-group">
+        <label for="sweep-select">Sweep</label>
+        <select id="sweep-select" value={sweep} on:change={onSweepChange}
+                disabled={!isConnected} title={!isConnected ? 'Not connected' : 'Select sweep'}>
+          {#each sweeps as s}
+            <option value={s.index}>Sweep {s.index} ({s.elevation != null ? s.elevation.toFixed(1) : '?'}°)</option>
+          {/each}
+          {#if sweeps.length === 0}
+            <option value={0}>Sweep 0</option>
+          {/if}
+        </select>
+      </div>
+
+      {#if variable}
+        <div class="control-info">
+          <span class="active-var">{variable}</span>
+          {#if sweeps[sweep]}
+            <span class="active-sweep">{sweeps[sweep]?.elevation?.toFixed(1) ?? '?'}°</span>
+          {/if}
+        </div>
+      {/if}
+
+      {#if hasRendered}
+        <div class="control-group map-controls">
+          <label class="toggle-label" title="Toggle map background">
+            <input type="checkbox" bind:checked={showMap} />
+            Map
+          </label>
+          {#if showMap}
+            <input
+              type="range"
+              min="0" max="100" step="1"
+              value={Math.round(mapOpacity * 100)}
+              on:input={(e) => { mapOpacity = parseInt(e.currentTarget.value) / 100; }}
+              class="opacity-slider"
+              title="Map opacity: {Math.round(mapOpacity * 100)}%"
+            />
+          {/if}
+          <label class="toggle-label" title="Toggle geographic overlay">
+            <input type="checkbox" bind:checked={showGeoOverlay} />
+            Geo
+          </label>
+        </div>
+        <button class="measure-toggle" class:active={measureToolsVisible}
+                on:click={toggleMeasureTools} title="Measurement & annotation tools (M)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M2 18L18 2"/><path d="M15 2h3v3"/><path d="M5 18H2v-3"/>
+            <path d="M9 14l2-2" stroke-dasharray="2 2"/>
+          </svg>
+        </button>
+        <div class="zoom-badge">{zoomLabel}</div>
+      {/if}
+    </div>
+
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_no_noninteractive_tabindex -->
+    <div class="viewer-canvas" class:dragging={isDragging} class:measure-active={measureActive}
+         bind:this={canvasEl}
+         on:wheel={onWheel} on:mousedown={onMouseDown} on:mousemove={onMouseMove}
+         on:mouseup={onMouseUp} on:mouseleave={onMouseLeave} on:mouseenter={onMouseEnter}
+         on:click={onCanvasClick} on:dblclick={onDblClick} on:contextmenu={onRightClick}
+         role="application" tabindex="0"
+         aria-label="Radar PPI — scroll to zoom, drag to pan, double-click to reset, right-click to probe">
+
+      {#if showMap && hasRendered && (radarLat !== 0 || radarLon !== 0)}
+        <MapBackground
+          {radarLat}
+          {radarLon}
+          maxRange={currentMaxRange}
+          {scale}
+          {translateX}
+          {translateY}
+          {containerWidth}
+          {containerHeight}
+          opacity={mapOpacity}
+        />
+      {/if}
+
+      <canvas bind:this={webglCanvas} class="webgl-canvas" class:has-map={showMap}></canvas>
+
+      {#if showGeoOverlay && hasRendered && (radarLat !== 0 || radarLon !== 0)}
+        <GeoOverlay
+          {radarLat}
+          {radarLon}
+          {radarName}
+          maxRange={currentMaxRange}
+          {scale}
+          {translateX}
+          {translateY}
+          {containerWidth}
+          {containerHeight}
+        />
+      {/if}
+
+      {#if hasRendered}
+        <StormOverlay
+          {scale}
+          {translateX}
+          {translateY}
+          maxRange={currentMaxRange}
+          {containerWidth}
+          {containerHeight}
+        />
+        <CrossSectionLine
+          active={csLineToolActive}
+          {scale}
+          {translateX}
+          {translateY}
+          maxRange={currentMaxRange}
+          {containerWidth}
+          {containerHeight}
+          {radarLat}
+          {radarLon}
+          on:requestCrossSection={handleCrossSectionRequest}
+        />
+      {/if}
+
+      {#if hasRendered}
+        <MeasureTools
+          {scale}
+          {translateX}
+          {translateY}
+          maxRange={currentMaxRange}
+          {containerWidth}
+          {containerHeight}
+        />
+        <Annotations
+          {scale}
+          {translateX}
+          {translateY}
+          maxRange={currentMaxRange}
+          {containerWidth}
+          {containerHeight}
+        />
+        <MeasureToolbar visible={measureToolsVisible} />
+        <BoxSelectTool
+          active={$boxSelectActive}
+          radarRange={currentMaxRange}
+          canvasWidth={containerWidth}
+          canvasHeight={containerHeight}
+          on:box-selected={(e) => selectedBox.set(e.detail)}
+        />
+      {/if}
+
+      {#if isLoading}
+        <div class="viewer-loading">
+          <div class="loading-spinner"></div>
+          <p>Loading sweep data...</p>
+        </div>
+      {:else if !hasRendered}
+        <div class="viewer-placeholder">
+          <div class="placeholder-icon">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 2 C12 2 12 12 12 12" />
+              <path d="M12 12 L18 8" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          </div>
+          <p>Select a variable to render</p>
+        </div>
+      {/if}
+
+      {#if showCoords && hasRendered}
+        <div class="coord-overlay">
+          <span class="coord-label">R</span>
+          <span class="coord-value">{coordRange} km</span>
+          <span class="coord-sep">/</span>
+          <span class="coord-label">Az</span>
+          <span class="coord-value">{coordAzimuth}°</span>
+        </div>
+      {/if}
+
+      {#if probeActive && probeValue !== null}
+        <div class="probe-tooltip" style="left: {probeX + 12}px; top: {probeY - 28}px">
+          {probeValue.toFixed(2)} {currentUnits}
+        </div>
+      {:else if probeActive && probeValue === null}
+        <div class="probe-tooltip muted" style="left: {probeX + 12}px; top: {probeY - 28}px">
+          No data
+        </div>
+      {/if}
+
+      {#if hasRendered}
+        <div class="colorbar-wrapper">
+          <ColorBar
+            cmapName={currentCmap}
+            vmin={currentVmin}
+            vmax={currentVmax}
+            units={currentUnits}
+            onCmapChange={handleCmapChange}
+            onRangeChange={handleRangeChange}
+          />
+        </div>
+      {/if}
+    </div>
+  {:else}
+    <div class="viewer-empty">
+      <div class="empty-icon">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+          <line x1="12" y1="18" x2="12" y2="12" />
+          <line x1="9" y1="15" x2="15" y2="15" />
+        </svg>
+      </div>
+      <h2>Open a radar file to begin</h2>
+      <p class="text-muted">Supported: CfRadial, ODIM, NEXRAD Level II, Sigmet, and more</p>
+      <div class="shortcut-hint">
+        Press <kbd>Ctrl</kbd>+<kbd>O</kbd> to open a file, or drag and drop
+      </div>
+    </div>
+  {/if}
+</div>
+
+<style>
+  .radar-viewer {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: var(--bg-primary);
+    overflow: hidden;
+  }
+
+  .viewer-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-lg);
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
+  }
+
+  .control-group {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+  }
+
+  .control-group label {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    font-weight: 600;
+  }
+
+  .control-group select { min-width: 160px; }
+
+  .control-info {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+  }
+
+  .active-var {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent-primary);
+    background: rgba(91, 108, 247, 0.1);
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(91, 108, 247, 0.2);
+  }
+
+  .active-sweep {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+
+  .zoom-badge {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 2px 8px;
+    min-width: 46px;
+    text-align: center;
+    user-select: none;
+  }
+
+  .viewer-canvas {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    cursor: crosshair;
+    user-select: none;
+  }
+
+  .viewer-canvas.dragging { cursor: grabbing; }
+  .viewer-canvas.measure-active { cursor: crosshair; }
+
+  .measure-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 150ms ease;
+  }
+
+  .measure-toggle:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: var(--border-light);
+  }
+
+  .measure-toggle.active {
+    background: rgba(91, 108, 247, 0.18);
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+    box-shadow: 0 0 8px rgba(91, 108, 247, 0.15);
+  }
+
+  .webgl-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+  }
+
+  .webgl-canvas.has-map {
+    /* When map is behind, let transparent pixels show the tiles */
+    background: transparent;
+  }
+
+  .map-controls {
+    gap: var(--spacing-sm);
+  }
+
+  .toggle-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    font-weight: 600;
+    gap: 4px;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+
+  .toggle-label input[type="checkbox"] {
+    margin: 0;
+    width: 14px;
+    height: 14px;
+  }
+
+  .opacity-slider {
+    width: 60px;
+    height: 4px;
+    accent-color: var(--accent-primary);
+    cursor: pointer;
+    vertical-align: middle;
+  }
+
+  .coord-overlay {
+    position: absolute;
+    top: var(--spacing-md);
+    left: var(--spacing-md);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    background: rgba(15, 15, 26, 0.82);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+    backdrop-filter: blur(4px);
+    pointer-events: none;
+    white-space: nowrap;
+    z-index: 10;
+  }
+
+  .coord-label { color: var(--text-muted); font-weight: 600; }
+  .coord-value { color: var(--text-primary); min-width: 52px; text-align: right; }
+  .coord-sep { color: var(--border-light, var(--border-color)); margin: 0 2px; }
+
+  .colorbar-wrapper {
+    position: absolute;
+    bottom: var(--spacing-md);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 15;
+    pointer-events: auto;
+  }
+
+  .probe-tooltip {
+    position: fixed;
+    padding: 3px 8px;
+    background: rgba(15, 15, 26, 0.92);
+    border: 1px solid var(--accent-primary);
+    border-radius: 3px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-primary);
+    pointer-events: none;
+    z-index: 50;
+    white-space: nowrap;
+    backdrop-filter: blur(4px);
+  }
+  .probe-tooltip.muted {
+    color: var(--text-muted);
+    border-color: var(--border-color);
+  }
+
+  .viewer-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-md);
+    color: var(--text-muted);
+    z-index: 5;
+  }
+
+  .loading-spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--border-color);
+    border-top-color: var(--accent-primary);
+    border-radius: 50%;
+    animation: spin 800ms linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .viewer-loading p { font-size: 13px; }
+
+  .viewer-placeholder, .viewer-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-md);
+    color: var(--text-muted);
+    height: 100%;
+    width: 100%;
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+  }
+
+  .viewer-empty { gap: var(--spacing-lg); position: relative; }
+  .placeholder-icon, .empty-icon { opacity: 0.2; }
+  .viewer-empty h2 { font-size: 18px; font-weight: 500; color: var(--text-secondary); }
+  .viewer-empty p { font-size: 13px; max-width: 400px; text-align: center; line-height: 1.6; }
+
+  .shortcut-hint {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: var(--spacing-sm);
+  }
+
+  .shortcut-hint :global(kbd) {
+    display: inline-block;
+    padding: 2px 6px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    color: var(--text-secondary);
+    box-shadow: 0 1px 0 var(--border-color);
+  }
+</style>
