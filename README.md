@@ -30,9 +30,9 @@ A lightweight, cross-platform desktop application for radar data visualization a
 - [Node.js](https://nodejs.org/) >= 20
 - [Rust](https://www.rust-lang.org/tools/install) (stable)
 - Python >= 3.10
-- System dependencies for Tauri:
-  - **macOS**: Xcode Command Line Tools
-  - **Linux**: `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev`
+- System dependencies:
+  - **macOS**: Xcode Command Line Tools, `brew install cairo pkg-config`
+  - **Linux**: `sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev libcairo2-dev pkg-config`
   - **Windows**: WebView2 (usually pre-installed on Windows 10+)
 
 ## Getting Started
