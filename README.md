@@ -45,14 +45,21 @@ cd xradar-desktop
 # Install frontend dependencies
 npm install
 
-# Install Python sidecar dependencies
+# Set up Python virtual environment and install sidecar dependencies
 cd python
+python3 -m venv .venv
+source .venv/bin/activate      # Linux/macOS
+# .venv\Scripts\activate       # Windows
 pip install -e ".[dev]"
 cd ..
 
 # Run in development mode
 npm run tauri dev
 ```
+
+> **Note:** A virtual environment is required on modern Linux distributions
+> (Ubuntu 23.04+, Debian 12+, Fedora 38+) due to [PEP 668](https://peps.python.org/pep-0668/).
+> The Tauri app automatically detects and uses `python/.venv` if it exists.
 
 ## Project Structure
 
@@ -78,6 +85,9 @@ xradar-desktop/
 ## Development
 
 ```bash
+# Activate the Python venv first
+source python/.venv/bin/activate
+
 # Lint Python
 ruff check --config ruff.toml python/
 ruff format --config ruff.toml python/
