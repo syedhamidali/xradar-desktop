@@ -26,11 +26,15 @@ def _make_synthetic_datatree() -> xr.DataTree:
             {
                 "DBZH": (
                     ["azimuth", "range"],
-                    np.random.default_rng(i).uniform(-20, 75, (n_azimuth, n_range)).astype(np.float32),
+                    np.random.default_rng(i)
+                    .uniform(-20, 75, (n_azimuth, n_range))
+                    .astype(np.float32),
                 ),
                 "VRADH": (
                     ["azimuth", "range"],
-                    np.random.default_rng(i + 100).uniform(-30, 30, (n_azimuth, n_range)).astype(np.float32),
+                    np.random.default_rng(i + 100)
+                    .uniform(-30, 30, (n_azimuth, n_range))
+                    .astype(np.float32),
                 ),
             },
             coords={

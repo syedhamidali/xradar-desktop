@@ -134,9 +134,7 @@ class RadarProcessor:
     # Internal
     # ------------------------------------------------------------------
 
-    def _plan_steps(
-        self, config: dict[str, Any]
-    ) -> list[tuple[str, Any]]:
+    def _plan_steps(self, config: dict[str, Any]) -> list[tuple[str, Any]]:
         """Determine which steps to run and in what order."""
         steps: list[tuple[str, Any]] = []
         if config.get("despeckle"):
@@ -171,6 +169,7 @@ class RadarProcessor:
 # Cross-section and vertical profile extraction
 # ======================================================================
 
+
 def _get_sweep_data(
     datatree: xr.DataTree,
     sweep_idx: int,
@@ -199,8 +198,16 @@ def _get_sweep_data(
     elif "elevation" in ds:
         elev = float(np.nanmean(ds["elevation"].values))
 
-    azimuth = da.coords["azimuth"].values if "azimuth" in da.coords else np.arange(da.shape[0], dtype=np.float64)
-    range_m = da.coords["range"].values if "range" in da.coords else np.arange(da.shape[-1], dtype=np.float64)
+    azimuth = (
+        da.coords["azimuth"].values
+        if "azimuth" in da.coords
+        else np.arange(da.shape[0], dtype=np.float64)
+    )
+    range_m = (
+        da.coords["range"].values
+        if "range" in da.coords
+        else np.arange(da.shape[-1], dtype=np.float64)
+    )
 
     return da, elev, azimuth.astype(np.float64), range_m.astype(np.float64)
 
@@ -269,13 +276,13 @@ def extract_cross_section(
     dy = (lats - radar_lat) * 110540.0
 
     # Compute azimuth and range from radar for each sample point
-    sample_range = np.sqrt(dx ** 2 + dy ** 2)
+    sample_range = np.sqrt(dx**2 + dy**2)
     sample_azimuth = np.degrees(np.arctan2(dx, dy)) % 360.0
 
     # Distance along the cross-section line
     total_dx = dx[-1] - dx[0]
     total_dy = dy[-1] - dy[0]
-    total_dist = np.sqrt(total_dx ** 2 + total_dy ** 2)
+    total_dist = np.sqrt(total_dx**2 + total_dy**2)
     distance_km = np.linspace(0, total_dist / 1000.0, n_points)
 
     re_eff = 8_493_000.0  # 4/3 earth radius in metres
@@ -303,7 +310,7 @@ def extract_cross_section(
             az = sample_azimuth[pi]
 
             # Height at this range and elevation
-            h = r * np.sin(elev_rad) + (r ** 2) / (2.0 * re_eff)
+            h = r * np.sin(elev_rad) + (r**2) / (2.0 * re_eff)
             row_heights.append(h / 1000.0)
 
             # Find nearest azimuth index
@@ -377,7 +384,7 @@ def extract_vertical_profile(
     # Convert point to local coords
     dx = (lon - radar_lon) * 111320.0 * np.cos(np.radians(radar_lat))
     dy = (lat - radar_lat) * 110540.0
-    point_range = np.sqrt(dx ** 2 + dy ** 2)
+    point_range = np.sqrt(dx**2 + dy**2)
     point_az = np.degrees(np.arctan2(dx, dy)) % 360.0
 
     re_eff = 8_493_000.0
@@ -395,7 +402,7 @@ def extract_vertical_profile(
             units = str(da.attrs["units"])
 
         elev_rad = np.radians(elev_deg)
-        h = point_range * np.sin(elev_rad) + (point_range ** 2) / (2.0 * re_eff)
+        h = point_range * np.sin(elev_rad) + (point_range**2) / (2.0 * re_eff)
 
         values_2d = da.values.astype(np.float64)
 

@@ -1,30 +1,14 @@
 <script lang="ts">
-  import { radarData, selectedVariable, selectedSweep } from '../stores/radarData';
+  import { radarData } from '../stores/radarData';
   import CollapsiblePanel from './CollapsiblePanel.svelte';
   import DataTable from './DataTable.svelte';
   import MetadataViewer from './MetadataViewer.svelte';
 
   const data = $derived($radarData);
-  const currentVariable = $derived($selectedVariable);
   const hasData = $derived(data.variables.length > 0);
 
-  // Variable search/filter
-  let varSearch = $state('');
-  const filteredVariables = $derived(varSearch.trim()
-    ? data.variables.filter(v => v.toLowerCase().includes(varSearch.toLowerCase()))
-    : data.variables);
-
-  // Viewer visibility
   let showDataTable = $state(false);
   let showMetadata = $state(false);
-
-  function selectVariable(v: string) {
-    selectedVariable.set(v);
-  }
-
-  function selectSweep(s: number) {
-    selectedSweep.set(s);
-  }
 
   function formatValue(value: any): string {
     if (value === null || value === undefined) return 'null';
@@ -66,37 +50,6 @@
       </button>
     </div>
 
-    <CollapsiblePanel title="Variables" badge={data.variables.length}>
-      {#if data.variables.length > 5}
-        <div class="var-search-wrapper">
-          <input
-            type="text"
-            placeholder="Filter variables..."
-            bind:value={varSearch}
-            class="var-search-input"
-          />
-        </div>
-      {/if}
-      <ul class="var-list">
-        {#each filteredVariables as v}
-          <li>
-            <button
-              class="var-item"
-              class:active={currentVariable === v}
-              on:click={() => selectVariable(v)}
-              title="Select variable: {v}"
-            >
-              <span class="var-icon">V</span>
-              <span class="var-name">{v}</span>
-            </button>
-          </li>
-        {/each}
-        {#if filteredVariables.length === 0 && varSearch}
-          <li class="text-muted empty-row" style="padding: 4px 8px; font-size: 11px;">No matching variables</li>
-        {/if}
-      </ul>
-    </CollapsiblePanel>
-
     <CollapsiblePanel title="Dimensions" badge={Object.keys(data.dimensions).length}>
       <table class="dim-table">
         <thead>
@@ -117,35 +70,6 @@
           {/if}
         </tbody>
       </table>
-    </CollapsiblePanel>
-
-    <CollapsiblePanel title="Sweeps" badge={data.sweeps.length}>
-      <ul class="sweep-list">
-        {#each data.sweeps as s}
-          <li>
-            <button
-              class="sweep-item"
-              class:active={$selectedSweep === s.index}
-              on:click={() => selectSweep(s.index)}
-              title="Sweep {s.index}: elevation {s.elevation != null ? s.elevation.toFixed(1) : '?'}deg"
-            >
-              <span class="sweep-index">{s.index}</span>
-              <span class="sweep-angle">{s.elevation != null ? s.elevation.toFixed(1) : '?'}</span>
-              <span class="sweep-dims">
-                {#if data.dimensions.azimuth}
-                  {data.dimensions.azimuth} az
-                {/if}
-                {#if data.dimensions.range}
-                  x {data.dimensions.range} rng
-                {/if}
-              </span>
-            </button>
-          </li>
-        {/each}
-        {#if data.sweeps.length === 0}
-          <li class="text-muted empty-row">No sweeps</li>
-        {/if}
-      </ul>
     </CollapsiblePanel>
 
     <CollapsiblePanel title="Attributes" badge={Object.keys(data.attributes).length} collapsed={true}>
@@ -223,137 +147,6 @@
     background: rgba(91, 108, 247, 0.14);
     color: var(--text-primary, #e6edf3);
     border-color: rgba(91, 108, 247, 0.3);
-  }
-
-  /* Variable search */
-  .var-search-wrapper {
-    padding: 0 0 var(--spacing-sm, 8px) 0;
-  }
-
-  .var-search-input {
-    width: 100%;
-    padding: 4px 8px;
-    font-size: 11px;
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.08));
-    border-radius: var(--radius-sm, 4px);
-    color: var(--text-primary, #e6edf3);
-    outline: none;
-    box-sizing: border-box;
-  }
-
-  .var-search-input:focus {
-    border-color: var(--accent-primary, #5b6cf7);
-  }
-
-  .var-search-input::placeholder {
-    color: var(--text-muted, #8b949e);
-  }
-
-  /* Variable list */
-  .var-list,
-  .sweep-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-  }
-
-  .var-item,
-  .sweep-item {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-    width: 100%;
-    padding: 5px var(--spacing-sm);
-    background: transparent;
-    border: none;
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    font-size: 12px;
-    text-align: left;
-    cursor: pointer;
-    height: auto;
-    transition: all 120ms cubic-bezier(0.4, 0, 0.2, 1);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
-
-  .var-item:hover,
-  .sweep-item:hover {
-    background: rgba(91, 108, 247, 0.06);
-  }
-
-  .var-item.active,
-  .sweep-item.active {
-    background: rgba(91, 108, 247, 0.14);
-    color: #fff;
-    box-shadow: inset 0 0 0 1px rgba(91, 108, 247, 0.15);
-  }
-
-  .var-item.active .var-icon,
-  .sweep-item.active .sweep-index {
-    background: var(--accent-primary);
-    color: #fff;
-    box-shadow: 0 0 8px rgba(91, 108, 247, 0.3);
-  }
-
-  .var-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 20px;
-    height: 20px;
-    font-size: 10px;
-    font-weight: 700;
-    color: var(--accent-primary);
-    background: rgba(91, 108, 247, 0.1);
-    border: 1px solid rgba(91, 108, 247, 0.1);
-    border-radius: 4px;
-    flex-shrink: 0;
-    transition: all 120ms ease;
-  }
-
-  .var-name {
-    font-family: var(--font-mono);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .sweep-index {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 20px;
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--text-muted);
-    background: rgba(140, 160, 250, 0.06);
-    border: 1px solid rgba(140, 160, 250, 0.08);
-    border-radius: 4px;
-    flex-shrink: 0;
-    transition: all 120ms ease;
-  }
-
-  .sweep-angle {
-    font-family: var(--font-mono);
-    font-size: 12px;
-  }
-
-  .sweep-angle::after {
-    content: '\00B0';
-    margin-left: 1px;
-    color: var(--text-muted);
-  }
-
-  .sweep-dims {
-    font-size: 10px;
-    color: var(--text-muted);
-    font-family: var(--font-mono);
-    margin-left: auto;
-    flex-shrink: 0;
-    opacity: 0.7;
   }
 
   /* Dimensions table */

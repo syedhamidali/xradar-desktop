@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 # Histograms
 # ---------------------------------------------------------------------------
 
+
 def compute_histogram(
     data: xr.DataArray,
     *,
@@ -54,8 +55,12 @@ def compute_histogram(
             "variable": str(data.name) if data.name else "unknown",
             "units": str(data.attrs.get("units", "")),
             "stats": {
-                "mean": None, "std": None, "min": None,
-                "max": None, "median": None, "count_valid": 0,
+                "mean": None,
+                "std": None,
+                "min": None,
+                "max": None,
+                "median": None,
+                "count_valid": 0,
             },
         }
 
@@ -75,7 +80,7 @@ def compute_histogram(
             "min": float(np.min(valid)),
             "max": float(np.max(valid)),
             "median": float(np.median(valid)),
-            "count_valid": int(len(valid)),
+            "count_valid": len(valid),
         },
     }
 
@@ -83,6 +88,7 @@ def compute_histogram(
 # ---------------------------------------------------------------------------
 # Area-averaged vertical profile
 # ---------------------------------------------------------------------------
+
 
 def area_averaged_profile(
     datatree: xr.DataTree,
@@ -138,7 +144,7 @@ def area_averaged_profile(
         if len(valid) > 0:
             means.append(float(np.mean(valid)))
             stds.append(float(np.std(valid)))
-            counts.append(int(len(valid)))
+            counts.append(len(valid))
         else:
             means.append(float("nan"))
             stds.append(float("nan"))
@@ -156,6 +162,7 @@ def area_averaged_profile(
 # ---------------------------------------------------------------------------
 # Cell statistics
 # ---------------------------------------------------------------------------
+
 
 def compute_cell_stats(
     datatree: xr.DataTree,
@@ -233,7 +240,7 @@ def compute_cell_stats(
         # Standard atmosphere beam height: h = r * sin(elev) + r^2 / (2 * Re_eff)
         re_eff = 8493_000.0  # 4/3 earth radius in metres
         elev_rad = np.radians(elev_deg)
-        height_m = mid_range_m * np.sin(elev_rad) + (mid_range_m ** 2) / (2.0 * re_eff)
+        height_m = mid_range_m * np.sin(elev_rad) + (mid_range_m**2) / (2.0 * re_eff)
 
         # Echo top: if any gate exceeds threshold at this elevation
         if np.any(valid >= echo_top_thresh_dbz):
@@ -258,6 +265,7 @@ def compute_cell_stats(
 # ---------------------------------------------------------------------------
 # QC statistics
 # ---------------------------------------------------------------------------
+
 
 def compute_qc_stats(
     data: xr.DataArray,
@@ -305,6 +313,7 @@ def compute_qc_stats(
 # ---------------------------------------------------------------------------
 # Dispatcher for WebSocket handler
 # ---------------------------------------------------------------------------
+
 
 def get_statistics(
     datatree: xr.DataTree,

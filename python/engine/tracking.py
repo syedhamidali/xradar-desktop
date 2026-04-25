@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import math
-import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -24,8 +23,8 @@ class CellInfo:
     """Properties of a single identified storm cell."""
 
     id: str
-    centroid_az: float          # degrees
-    centroid_range: float       # metres
+    centroid_az: float  # degrees
+    centroid_range: float  # metres
     area_km2: float
     max_dbz: float
     mean_dbz: float
@@ -40,9 +39,7 @@ class CellInfo:
             "area_km2": round(self.area_km2, 2),
             "max_dbz": round(self.max_dbz, 1),
             "mean_dbz": round(self.mean_dbz, 1),
-            "boundary_points": [
-                [round(az, 2), round(rng, 2)] for az, rng in self.boundary_points
-            ],
+            "boundary_points": [[round(az, 2), round(rng, 2)] for az, rng in self.boundary_points],
         }
 
 
@@ -52,8 +49,8 @@ class CellTrack:
 
     track_id: str
     cell_history: list[CellInfo] = field(default_factory=list)
-    speed_mps: float = 0.0       # metres per second
-    direction_deg: float = 0.0   # meteorological convention (from-direction)
+    speed_mps: float = 0.0  # metres per second
+    direction_deg: float = 0.0  # meteorological convention (from-direction)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a JSON-friendly dictionary."""
@@ -68,6 +65,7 @@ class CellTrack:
 # ---------------------------------------------------------------------------
 # Cell identification
 # ---------------------------------------------------------------------------
+
 
 def identify_cells(
     data: xr.DataArray,
@@ -102,10 +100,7 @@ def identify_cells(
         gate_spacing_m = float(range_m[0]) if len(range_m) == 1 else 250.0
 
     n_az = len(azimuth)
-    if n_az >= 2:
-        az_spacing_deg = float(np.median(np.diff(np.sort(azimuth))))
-    else:
-        az_spacing_deg = 1.0
+    az_spacing_deg = float(np.median(np.diff(np.sort(azimuth)))) if n_az >= 2 else 1.0
 
     # Binary mask: above threshold and not NaN
     mask = np.where(np.isnan(values), False, values >= threshold_dbz)
@@ -148,19 +143,24 @@ def identify_cells(
 
         # Boundary extraction: find edge pixels of the component
         boundary_points = _extract_boundary(
-            component_mask, azimuth, range_m, max_points=120,
+            component_mask,
+            azimuth,
+            range_m,
+            max_points=120,
         )
 
         cell_id = f"C{label_id:03d}"
-        cells.append(CellInfo(
-            id=cell_id,
-            centroid_az=centroid_az,
-            centroid_range=centroid_range,
-            area_km2=total_area_km2,
-            max_dbz=max_dbz,
-            mean_dbz=mean_dbz,
-            boundary_points=boundary_points,
-        ))
+        cells.append(
+            CellInfo(
+                id=cell_id,
+                centroid_az=centroid_az,
+                centroid_range=centroid_range,
+                area_km2=total_area_km2,
+                max_dbz=max_dbz,
+                mean_dbz=mean_dbz,
+                boundary_points=boundary_points,
+            )
+        )
 
     # Sort by descending max dBZ
     cells.sort(key=lambda c: c.max_dbz, reverse=True)
@@ -171,7 +171,9 @@ def identify_cells(
 
     logger.info(
         "Identified %d cells above %.1f dBZ (min area %.1f km2)",
-        len(cells), threshold_dbz, min_size_km2,
+        len(cells),
+        threshold_dbz,
+        min_size_km2,
     )
     return cells
 
@@ -216,6 +218,7 @@ def _extract_boundary(
 # ---------------------------------------------------------------------------
 # Cell tracking (nearest-neighbour)
 # ---------------------------------------------------------------------------
+
 
 def _cell_distance_km(a: CellInfo, b: CellInfo) -> float:
     """Approximate distance in km between two cell centroids.
@@ -285,18 +288,22 @@ def track_cells(
             tracks.append(track)
         else:
             # Cell from t0 with no match — ended
-            tracks.append(CellTrack(
-                track_id=f"T{c0.id[1:]}",
-                cell_history=[c0],
-            ))
+            tracks.append(
+                CellTrack(
+                    track_id=f"T{c0.id[1:]}",
+                    cell_history=[c0],
+                )
+            )
 
     # Unmatched t1 cells — new cells
     for j, c1 in enumerate(cells_t1):
         if j not in used_t1:
-            tracks.append(CellTrack(
-                track_id=f"TN{j + 1:02d}",
-                cell_history=[c1],
-            ))
+            tracks.append(
+                CellTrack(
+                    track_id=f"TN{j + 1:02d}",
+                    cell_history=[c1],
+                )
+            )
 
     logger.info(
         "Tracked %d cells (%d matched, %d new)",

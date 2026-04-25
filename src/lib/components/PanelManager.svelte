@@ -24,10 +24,7 @@
   let dragTarget = $state<string | null>(null);
   let dragOverTarget = $state<string | null>(null);
 
-  let _pmEffectCount = 0;
   $effect(() => {
-    _pmEffectCount++;
-    if (_pmEffectCount > 5) console.warn('[DEBUG] PanelManager effect:', _pmEffectCount);
     const ws = $currentWorkspace;
     panelOrder = ws.rightPanelOrder?.length
       ? ws.rightPanelOrder.filter((id: string) => PANEL_MAP[id])

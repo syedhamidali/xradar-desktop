@@ -19,18 +19,21 @@ if str(_server_dir) not in sys.path:
     sys.path.insert(0, str(_server_dir))
 
 import websockets
+from engine.dualpol import histogram_data, region_stats, scatter_data
 from engine.exporter import RadarExporter
-from engine.processor import RadarProcessor
+from engine.processor import RadarProcessor, extract_cross_section, extract_vertical_profile
+from engine.qc import QC_REGISTRY, QCPipeline
 from engine.reader import RadarReader, _serializable
 from engine.renderer import RadarRenderer
-from engine.tracking import CellInfo, identify_cells, track_cells, extrapolate_cell
 from engine.retrievals import RETRIEVAL_REGISTRY, run_retrieval
 from engine.statistics import get_statistics
-from engine.dualpol import scatter_data, histogram_data, region_stats
-from engine.qc import QC_REGISTRY, QCPipeline
-from engine.processor import extract_cross_section, extract_vertical_profile
-from engine.temporal import compute_time_series, compute_difference, compute_accumulation, compute_trend
-from engine.volume import extract_volume, extract_cross_section_3d
+from engine.temporal import (
+    compute_accumulation,
+    compute_difference,
+    compute_time_series,
+)
+from engine.tracking import identify_cells, track_cells
+from engine.volume import extract_cross_section_3d, extract_volume
 from websockets.asyncio.server import ServerConnection
 
 logging.basicConfig(
@@ -221,7 +224,10 @@ class ConnectionHandler:
         result = await loop.run_in_executor(
             None,
             lambda: scatter_data(
-                datatree, var1, var2, sweep,
+                datatree,
+                var1,
+                var2,
+                sweep,
                 subsample=int(subsample),
                 color_var=color_var,
             ),
@@ -280,7 +286,9 @@ class ConnectionHandler:
         result = await loop.run_in_executor(
             None,
             lambda: region_stats(
-                datatree, variable, sweep,
+                datatree,
+                variable,
+                sweep,
                 az_min=float(az_min),
                 az_max=float(az_max),
                 range_min=float(range_min),
@@ -317,7 +325,9 @@ class ConnectionHandler:
             await self.send_error("get_volume: missing or invalid 'variable'")
             return
         if not isinstance(box, dict):
-            await self.send_error("get_volume: 'box' must be an object with x_min, x_max, y_min, y_max")
+            await self.send_error(
+                "get_volume: 'box' must be an object with x_min, x_max, y_min, y_max"
+            )
             return
         for key in ("x_min", "x_max", "y_min", "y_max"):
             if key not in box or not isinstance(box[key], (int, float)):
@@ -356,16 +366,18 @@ class ConnectionHandler:
         flat_data: np.ndarray = result.pop("data")
         val_bytes = flat_data.tobytes()
 
-        CHUNK_SIZE = 900 * 1024
-        chunks = [val_bytes[i : i + CHUNK_SIZE] for i in range(0, len(val_bytes), CHUNK_SIZE)]
+        chunk_size = 900 * 1024
+        chunks = [val_bytes[i : i + chunk_size] for i in range(0, len(val_bytes), chunk_size)]
 
         # Send JSON header
-        await self.send({
-            "type": "volume_data",
-            **result,
-            "chunks": len(chunks),
-            "byte_length": len(val_bytes),
-        })
+        await self.send(
+            {
+                "type": "volume_data",
+                **result,
+                "chunks": len(chunks),
+                "byte_length": len(val_bytes),
+            }
+        )
 
         # Send binary chunks
         try:
@@ -439,16 +451,18 @@ class ConnectionHandler:
         flat_data: np.ndarray = result.pop("data")
         val_bytes = flat_data.tobytes()
 
-        CHUNK_SIZE = 900 * 1024
-        chunks = [val_bytes[i : i + CHUNK_SIZE] for i in range(0, len(val_bytes), CHUNK_SIZE)]
+        chunk_size = 900 * 1024
+        chunks = [val_bytes[i : i + chunk_size] for i in range(0, len(val_bytes), chunk_size)]
 
         # Send JSON header
-        await self.send({
-            "type": "cross_section_3d_data",
-            **result,
-            "chunks": len(chunks),
-            "byte_length": len(val_bytes),
-        })
+        await self.send(
+            {
+                "type": "cross_section_3d_data",
+                **result,
+                "chunks": len(chunks),
+                "byte_length": len(val_bytes),
+            }
+        )
 
         # Send binary chunks
         try:
@@ -460,11 +474,13 @@ class ConnectionHandler:
     async def _handle_ping(self, msg: dict[str, Any]) -> None:
         """Health check handler — responds with pong and server status."""
         has_file = _get_datatree(msg.get("file_id")) is not None
-        await self.send({
-            "type": "pong",
-            "status": "ok",
-            "file_open": has_file,
-        })
+        await self.send(
+            {
+                "type": "pong",
+                "status": "ok",
+                "file_open": has_file,
+            }
+        )
 
     async def _handle_open_file(self, msg: dict[str, Any]) -> None:
         global _last_file_id
@@ -477,23 +493,27 @@ class ConnectionHandler:
             await self.send_error("open_file: 'path' must be a string")
             return
 
-        await self.send_progress(5, f"Detecting format for {Path(path).name}...")
+        filename = Path(path).name
+        await self.send_progress(5, f"Detecting format for {filename}...")
 
-        # Create a dedicated RadarReader for multi-file support
         file_id = str(uuid.uuid4())
         reader = RadarReader()
 
         _shared_renderer.invalidate_cache()
         loop = asyncio.get_running_loop()
+
+        await self.send_progress(15, f"Opening {filename}...")
         schema = await loop.run_in_executor(None, reader.open_file, path)
 
-        # Store in multi-file dict and sync legacy shared reader
+        await self.send_progress(80, f"Building metadata for {filename}...")
+
         _file_readers[file_id] = reader
         _last_file_id = file_id
         _shared_reader._dtree = reader._dtree
         _shared_reader._path = reader._path
         _shared_reader._format = reader._format
 
+        await self.send_progress(100, f"Loaded {filename}")
         await self.send({"type": "file_opened", "data": schema, "file_id": file_id})
 
         # Pre-render first variable / sweep 0 in background for instant display
@@ -530,11 +550,18 @@ class ConnectionHandler:
         try:
             reader = _get_reader(file_id)
             data = await loop.run_in_executor(
-                None, reader.get_sweep_data, sweep, variable,
+                None,
+                reader.get_sweep_data,
+                sweep,
+                variable,
             )
             async with _render_lock:
                 await loop.run_in_executor(
-                    None, _shared_renderer.render_sweep, data, variable, sweep,
+                    None,
+                    _shared_renderer.render_sweep,
+                    data,
+                    variable,
+                    sweep,
                 )
             logger.info("Pre-rendered %s sweep %d", variable, sweep)
         except Exception:
@@ -576,9 +603,7 @@ class ConnectionHandler:
         loop = asyncio.get_running_loop()
 
         reader = _get_reader(file_id)
-        data = await loop.run_in_executor(
-            None, reader.get_sweep_data, sweep, variable
-        )
+        data = await loop.run_in_executor(None, reader.get_sweep_data, sweep, variable)
 
         async with _render_lock:
             result = await loop.run_in_executor(
@@ -606,7 +631,6 @@ class ConnectionHandler:
         Optional ``file_id`` selects which open file to read from (defaults
         to the most recently opened file for backward compatibility).
         """
-        import struct
 
         variable = msg.get("variable")
         sweep = msg.get("sweep", 0)
@@ -624,13 +648,24 @@ class ConnectionHandler:
 
         loop = asyncio.get_running_loop()
         data = await loop.run_in_executor(
-            None, reader.get_sweep_data, sweep, variable,
+            None,
+            reader.get_sweep_data,
+            sweep,
+            variable,
         )
 
         import numpy as np
 
-        azimuth = data.coords["azimuth"].values.astype(np.float32) if "azimuth" in data.coords else np.arange(data.shape[0], dtype=np.float32)
-        range_m = data.coords["range"].values.astype(np.float32) if "range" in data.coords else np.arange(data.shape[-1], dtype=np.float32)
+        azimuth = (
+            data.coords["azimuth"].values.astype(np.float32)
+            if "azimuth" in data.coords
+            else np.arange(data.shape[0], dtype=np.float32)
+        )
+        range_m = (
+            data.coords["range"].values.astype(np.float32)
+            if "range" in data.coords
+            else np.arange(data.shape[-1], dtype=np.float32)
+        )
         values = np.nan_to_num(data.values.astype(np.float32), nan=-9999.0)
 
         # Pack into a single binary buffer: [azimuth][range][values]
@@ -642,6 +677,7 @@ class ConnectionHandler:
 
         # Resolve colormap range
         from engine.renderer import _resolve_range
+
         vmin, vmax = _resolve_range(variable)
         if vmin is None:
             vmin = float(np.nanmin(data.values))
@@ -651,27 +687,29 @@ class ConnectionHandler:
         units = str(data.attrs.get("units", data.attrs.get("unit", "")))
 
         # Chunk the buffer to stay under WKWebView's 1 MB WebSocket message limit.
-        import math
-        CHUNK_SIZE = 900 * 1024  # 900 KB — comfortably under the 1 MB WKWebView cap
-        chunks = [buf[i : i + CHUNK_SIZE] for i in range(0, len(buf), CHUNK_SIZE)]
+
+        chunk_size = 900 * 1024  # 900 KB — comfortably under the 1 MB WKWebView cap
+        chunks = [buf[i : i + chunk_size] for i in range(0, len(buf), chunk_size)]
         n_chunks = len(chunks)
 
         # Send JSON header first
-        await self.send({
-            "type": "sweep_data",
-            "variable": variable,
-            "sweep": sweep,
-            "n_az": len(azimuth),
-            "n_range": len(range_m),
-            "azimuth_bytes": len(az_bytes),
-            "range_bytes": len(rng_bytes),
-            "values_bytes": len(val_bytes),
-            "vmin": vmin,
-            "vmax": vmax,
-            "units": units,
-            "max_range": float(range_m.max()),
-            "chunks": n_chunks,
-        })
+        await self.send(
+            {
+                "type": "sweep_data",
+                "variable": variable,
+                "sweep": sweep,
+                "n_az": len(azimuth),
+                "n_range": len(range_m),
+                "azimuth_bytes": len(az_bytes),
+                "range_bytes": len(rng_bytes),
+                "values_bytes": len(val_bytes),
+                "vmin": vmin,
+                "vmax": vmax,
+                "units": units,
+                "max_range": float(range_m.max()),
+                "chunks": n_chunks,
+            }
+        )
 
         # Send each chunk as a separate binary WebSocket message.
         try:
@@ -696,9 +734,7 @@ class ConnectionHandler:
         loop = asyncio.get_running_loop()
 
         def progress_sync(percent: int, message: str) -> None:
-            asyncio.run_coroutine_threadsafe(
-                self.send_progress(percent, message), loop
-            )
+            asyncio.run_coroutine_threadsafe(self.send_progress(percent, message), loop)
 
         async with _mutation_lock:
             result_tree = await loop.run_in_executor(
@@ -752,9 +788,7 @@ class ConnectionHandler:
         loop = asyncio.get_running_loop()
 
         def progress_sync(percent: int, message: str) -> None:
-            asyncio.run_coroutine_threadsafe(
-                self.send_progress(percent, message), loop
-            )
+            asyncio.run_coroutine_threadsafe(self.send_progress(percent, message), loop)
 
         async with _mutation_lock:
             saved_path = await loop.run_in_executor(
@@ -808,9 +842,7 @@ class ConnectionHandler:
         loop = asyncio.get_running_loop()
 
         def progress_sync(percent: int, message: str) -> None:
-            asyncio.run_coroutine_threadsafe(
-                self.send_progress(percent, message), loop
-            )
+            asyncio.run_coroutine_threadsafe(self.send_progress(percent, message), loop)
 
         async with _mutation_lock:
             saved_paths = await loop.run_in_executor(
@@ -827,12 +859,15 @@ class ConnectionHandler:
                 ),
             )
 
-        await self.send({
-            "type": "batch_export_complete",
-            "paths": saved_paths,
-            "count": len(saved_paths),
-            "output_dir": output_dir or (str(Path(saved_paths[0]).parent) if saved_paths else None),
-        })
+        await self.send(
+            {
+                "type": "batch_export_complete",
+                "paths": saved_paths,
+                "count": len(saved_paths),
+                "output_dir": output_dir
+                or (str(Path(saved_paths[0]).parent) if saved_paths else None),
+            }
+        )
 
     async def _handle_export_animation(self, msg: dict[str, Any]) -> None:
         variable = msg.get("variable")
@@ -872,9 +907,7 @@ class ConnectionHandler:
         loop = asyncio.get_running_loop()
 
         def progress_sync(percent: int, message: str) -> None:
-            asyncio.run_coroutine_threadsafe(
-                self.send_progress(percent, message), loop
-            )
+            asyncio.run_coroutine_threadsafe(self.send_progress(percent, message), loop)
 
         async with _mutation_lock:
             saved_path = await loop.run_in_executor(
@@ -922,7 +955,12 @@ class ConnectionHandler:
 
         loop = asyncio.get_running_loop()
         result_da = await loop.run_in_executor(
-            None, run_retrieval, datatree, name, sweep, params,
+            None,
+            run_retrieval,
+            datatree,
+            name,
+            sweep,
+            params,
         )
 
         import numpy as np
@@ -938,30 +976,34 @@ class ConnectionHandler:
                 "std": float(np.std(valid)),
             }
 
-        await self.send({
-            "type": "retrieval_result",
-            "name": name,
-            "sweep": sweep,
-            "shape": list(values.shape),
-            "units": str(result_da.attrs.get("units", "")),
-            "long_name": str(result_da.attrs.get("long_name", name)),
-            "stats": stats,
-        })
+        await self.send(
+            {
+                "type": "retrieval_result",
+                "name": name,
+                "sweep": sweep,
+                "shape": list(values.shape),
+                "units": str(result_da.attrs.get("units", "")),
+                "long_name": str(result_da.attrs.get("long_name", name)),
+                "stats": stats,
+            }
+        )
 
         # Send the data as binary (chunked like sweep_data)
         val_bytes = np.nan_to_num(values, nan=-9999.0).tobytes()
-        CHUNK_SIZE = 900 * 1024
-        chunks = [val_bytes[i : i + CHUNK_SIZE] for i in range(0, len(val_bytes), CHUNK_SIZE)]
+        chunk_size = 900 * 1024
+        chunks = [val_bytes[i : i + chunk_size] for i in range(0, len(val_bytes), chunk_size)]
 
-        await self.send({
-            "type": "retrieval_data",
-            "name": name,
-            "sweep": sweep,
-            "n_az": values.shape[0] if values.ndim >= 1 else 1,
-            "n_range": values.shape[1] if values.ndim >= 2 else values.shape[0],
-            "chunks": len(chunks),
-            "byte_length": len(val_bytes),
-        })
+        await self.send(
+            {
+                "type": "retrieval_data",
+                "name": name,
+                "sweep": sweep,
+                "n_az": values.shape[0] if values.ndim >= 1 else 1,
+                "n_range": values.shape[1] if values.ndim >= 2 else values.shape[0],
+                "chunks": len(chunks),
+                "byte_length": len(val_bytes),
+            }
+        )
 
         try:
             for chunk in chunks:
@@ -973,15 +1015,17 @@ class ConnectionHandler:
         """List available retrievals with their metadata."""
         retrievals = []
         for name, entry in RETRIEVAL_REGISTRY.items():
-            retrievals.append({
-                "name": name,
-                "description": entry["description"],
-                "required_variables": entry["required_variables"],
-                "params": {
-                    k: {"type": v["type"], "default": v["default"], "label": v["label"]}
-                    for k, v in entry["params"].items()
-                },
-            })
+            retrievals.append(
+                {
+                    "name": name,
+                    "description": entry["description"],
+                    "required_variables": entry["required_variables"],
+                    "params": {
+                        k: {"type": v["type"], "default": v["default"], "label": v["label"]}
+                        for k, v in entry["params"].items()
+                    },
+                }
+            )
         await self.send({"type": "retrievals_list", "retrievals": retrievals})
 
     # ------------------------------------------------------------------
@@ -993,7 +1037,7 @@ class ConnectionHandler:
         start = msg.get("start")
         end = msg.get("end")
         variable = msg.get("variable")
-        n_points = msg.get("n_points", 200)
+        _ = msg.get("n_points", 200)
 
         if not variable or not isinstance(variable, str):
             await self.send_error("get_cross_section: missing or invalid 'variable'")
@@ -1115,7 +1159,6 @@ class ConnectionHandler:
 
         Response: same chunked binary protocol as ``get_sweep_data``.
         """
-        import struct
 
         steps = msg.get("steps", [])
         variable = msg.get("variable")
@@ -1150,7 +1193,10 @@ class ConnectionHandler:
 
         await self.send_progress(15, f"Reading {variable} sweep {sweep}...")
         data = await loop.run_in_executor(
-            None, reader.get_sweep_data, sweep, variable,
+            None,
+            reader.get_sweep_data,
+            sweep,
+            variable,
         )
 
         await self.send_progress(30, f"Running {len(pipeline)} QC steps...")
@@ -1161,8 +1207,16 @@ class ConnectionHandler:
 
         import numpy as np
 
-        azimuth = cleaned.coords["azimuth"].values.astype(np.float32) if "azimuth" in cleaned.coords else np.arange(cleaned.shape[0], dtype=np.float32)
-        range_m = cleaned.coords["range"].values.astype(np.float32) if "range" in cleaned.coords else np.arange(cleaned.shape[-1], dtype=np.float32)
+        azimuth = (
+            cleaned.coords["azimuth"].values.astype(np.float32)
+            if "azimuth" in cleaned.coords
+            else np.arange(cleaned.shape[0], dtype=np.float32)
+        )
+        range_m = (
+            cleaned.coords["range"].values.astype(np.float32)
+            if "range" in cleaned.coords
+            else np.arange(cleaned.shape[-1], dtype=np.float32)
+        )
         values = np.nan_to_num(cleaned.values.astype(np.float32), nan=-9999.0)
 
         az_bytes = azimuth.tobytes()
@@ -1171,6 +1225,7 @@ class ConnectionHandler:
         buf = az_bytes + rng_bytes + val_bytes
 
         from engine.renderer import _resolve_range
+
         vmin, vmax = _resolve_range(variable)
         if vmin is None:
             vmin = float(np.nanmin(cleaned.values))
@@ -1179,26 +1234,27 @@ class ConnectionHandler:
 
         units = str(cleaned.attrs.get("units", cleaned.attrs.get("unit", "")))
 
-        import math
-        CHUNK_SIZE = 900 * 1024
-        chunks = [buf[i : i + CHUNK_SIZE] for i in range(0, len(buf), CHUNK_SIZE)]
+        chunk_size = 900 * 1024
+        chunks = [buf[i : i + chunk_size] for i in range(0, len(buf), chunk_size)]
 
-        await self.send({
-            "type": "qc_result",
-            "variable": variable,
-            "sweep": sweep,
-            "n_az": len(azimuth),
-            "n_range": len(range_m),
-            "azimuth_bytes": len(az_bytes),
-            "range_bytes": len(rng_bytes),
-            "values_bytes": len(val_bytes),
-            "vmin": vmin,
-            "vmax": vmax,
-            "units": units,
-            "max_range": float(range_m.max()),
-            "chunks": len(chunks),
-            "steps_applied": pipeline.to_dict(),
-        })
+        await self.send(
+            {
+                "type": "qc_result",
+                "variable": variable,
+                "sweep": sweep,
+                "n_az": len(azimuth),
+                "n_range": len(range_m),
+                "azimuth_bytes": len(az_bytes),
+                "range_bytes": len(rng_bytes),
+                "values_bytes": len(val_bytes),
+                "vmin": vmin,
+                "vmax": vmax,
+                "units": units,
+                "max_range": float(range_m.max()),
+                "chunks": len(chunks),
+                "steps_applied": pipeline.to_dict(),
+            }
+        )
 
         try:
             for chunk in chunks:
@@ -1212,22 +1268,24 @@ class ConnectionHandler:
         """Return the QC algorithm registry with descriptions and parameter metadata."""
         algorithms = []
         for name, entry in QC_REGISTRY.items():
-            algorithms.append({
-                "name": name,
-                "description": entry["description"],
-                "params": {
-                    k: {
-                        "type": v["type"],
-                        "default": v["default"],
-                        "label": v["label"],
-                        **({"min": v["min"]} if "min" in v else {}),
-                        **({"max": v["max"]} if "max" in v else {}),
-                        **({"options": v["options"]} if "options" in v else {}),
-                    }
-                    for k, v in entry["params"].items()
-                },
-                "applicable_variables": entry["applicable_variables"],
-            })
+            algorithms.append(
+                {
+                    "name": name,
+                    "description": entry["description"],
+                    "params": {
+                        k: {
+                            "type": v["type"],
+                            "default": v["default"],
+                            "label": v["label"],
+                            **({"min": v["min"]} if "min" in v else {}),
+                            **({"max": v["max"]} if "max" in v else {}),
+                            **({"options": v["options"]} if "options" in v else {}),
+                        }
+                        for k, v in entry["params"].items()
+                    },
+                    "applicable_variables": entry["applicable_variables"],
+                }
+            )
         await self.send({"type": "qc_algorithms_list", "algorithms": algorithms})
 
     # ------------------------------------------------------------------
@@ -1265,8 +1323,13 @@ class ConnectionHandler:
 
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
-            None, compute_time_series, readers, variable, sweep,
-            float(azimuth), float(range_m),
+            None,
+            compute_time_series,
+            readers,
+            variable,
+            sweep,
+            float(azimuth),
+            float(range_m),
         )
 
         await self.send({"type": "time_series_result", **result})
@@ -1298,7 +1361,12 @@ class ConnectionHandler:
 
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
-            None, compute_difference, reader1, reader2, variable, sweep,
+            None,
+            compute_difference,
+            reader1,
+            reader2,
+            variable,
+            sweep,
         )
 
         diff_bytes = result.pop("diff_values")
@@ -1308,8 +1376,8 @@ class ConnectionHandler:
         await self.send({"type": "difference_result", **result})
 
         buf = az_bytes_raw + rng_bytes_raw + diff_bytes
-        CHUNK_SIZE = 900 * 1024
-        chunks = [buf[i : i + CHUNK_SIZE] for i in range(0, len(buf), CHUNK_SIZE)]
+        chunk_size = 900 * 1024
+        chunks = [buf[i : i + chunk_size] for i in range(0, len(buf), chunk_size)]
 
         try:
             for chunk in chunks:
@@ -1347,7 +1415,12 @@ class ConnectionHandler:
 
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
-            None, compute_accumulation, readers, variable, sweep, method,
+            None,
+            compute_accumulation,
+            readers,
+            variable,
+            sweep,
+            method,
         )
 
         await self.send({"type": "accumulation_result", **result})
@@ -1376,9 +1449,7 @@ class ConnectionHandler:
             await self.send_error("identify_cells: 'variable' must be a string")
             return
         if not isinstance(sweep_idx, int) or sweep_idx < 0:
-            await self.send_error(
-                "identify_cells: 'sweep' must be a non-negative integer"
-            )
+            await self.send_error("identify_cells: 'sweep' must be a non-negative integer")
             return
 
         reader = _get_reader(msg.get("file_id"))
@@ -1390,32 +1461,39 @@ class ConnectionHandler:
         threshold_dbz = float(params.get("threshold_dbz", 35.0))
         min_size_km2 = float(params.get("min_size_km2", 10.0))
 
-        await self.send_progress(
-            10, f"Identifying cells in {variable} sweep {sweep_idx}..."
-        )
+        await self.send_progress(10, f"Identifying cells in {variable} sweep {sweep_idx}...")
 
         loop = asyncio.get_running_loop()
 
         data = await loop.run_in_executor(
-            None, reader.get_sweep_data, sweep_idx, variable,
+            None,
+            reader.get_sweep_data,
+            sweep_idx,
+            variable,
         )
 
         cells = await loop.run_in_executor(
-            None, identify_cells, data, threshold_dbz, min_size_km2,
+            None,
+            identify_cells,
+            data,
+            threshold_dbz,
+            min_size_km2,
         )
 
         # Store for subsequent tracking
         self._previous_cells = cells
 
         await self.send_progress(100, f"Found {len(cells)} cells")
-        await self.send({
-            "type": "cells_identified",
-            "variable": variable,
-            "sweep": sweep_idx,
-            "threshold_dbz": threshold_dbz,
-            "min_size_km2": min_size_km2,
-            "cells": [c.to_dict() for c in cells],
-        })
+        await self.send(
+            {
+                "type": "cells_identified",
+                "variable": variable,
+                "sweep": sweep_idx,
+                "threshold_dbz": threshold_dbz,
+                "min_size_km2": min_size_km2,
+                "cells": [c.to_dict() for c in cells],
+            }
+        )
 
     async def _handle_track_cells(self, msg: dict[str, Any]) -> None:
         """Track cells between the previous identification and a new sweep.
@@ -1445,9 +1523,7 @@ class ConnectionHandler:
             return
 
         if not hasattr(self, "_previous_cells") or not self._previous_cells:
-            await self.send_error(
-                "track_cells: no previous cells — run identify_cells first"
-            )
+            await self.send_error("track_cells: no previous cells — run identify_cells first")
             return
 
         threshold_dbz = float(params.get("threshold_dbz", 35.0))
@@ -1455,35 +1531,46 @@ class ConnectionHandler:
         max_distance_km = float(params.get("max_distance_km", 30.0))
         dt_seconds = float(params.get("dt_seconds", 300.0))
 
-        await self.send_progress(
-            10, f"Tracking cells in {variable} sweep {sweep_idx}..."
-        )
+        await self.send_progress(10, f"Tracking cells in {variable} sweep {sweep_idx}...")
 
         loop = asyncio.get_running_loop()
 
         data = await loop.run_in_executor(
-            None, reader.get_sweep_data, sweep_idx, variable,
+            None,
+            reader.get_sweep_data,
+            sweep_idx,
+            variable,
         )
 
         new_cells = await loop.run_in_executor(
-            None, identify_cells, data, threshold_dbz, min_size_km2,
+            None,
+            identify_cells,
+            data,
+            threshold_dbz,
+            min_size_km2,
         )
 
         tracks = await loop.run_in_executor(
-            None, track_cells, self._previous_cells, new_cells,
-            max_distance_km, dt_seconds,
+            None,
+            track_cells,
+            self._previous_cells,
+            new_cells,
+            max_distance_km,
+            dt_seconds,
         )
 
         self._previous_cells = new_cells
 
         await self.send_progress(100, f"Tracked {len(tracks)} cells")
-        await self.send({
-            "type": "cells_tracked",
-            "variable": variable,
-            "sweep": sweep_idx,
-            "cells": [c.to_dict() for c in new_cells],
-            "tracks": [t.to_dict() for t in tracks],
-        })
+        await self.send(
+            {
+                "type": "cells_tracked",
+                "variable": variable,
+                "sweep": sweep_idx,
+                "cells": [c.to_dict() for c in new_cells],
+                "tracks": [t.to_dict() for t in tracks],
+            }
+        )
 
     # ------------------------------------------------------------------
     # Data table handler — windowed azimuth x range grid
@@ -1525,12 +1612,23 @@ class ConnectionHandler:
 
         loop = asyncio.get_running_loop()
         data = await loop.run_in_executor(
-            None, reader.get_sweep_data, sweep, variable,
+            None,
+            reader.get_sweep_data,
+            sweep,
+            variable,
         )
 
         # Extract coordinate arrays
-        azimuth = data.coords["azimuth"].values if "azimuth" in data.coords else np.arange(data.shape[0], dtype=np.float64)
-        range_m = data.coords["range"].values if "range" in data.coords else np.arange(data.shape[-1], dtype=np.float64)
+        azimuth = (
+            data.coords["azimuth"].values
+            if "azimuth" in data.coords
+            else np.arange(data.shape[0], dtype=np.float64)
+        )
+        range_m = (
+            data.coords["range"].values
+            if "range" in data.coords
+            else np.arange(data.shape[-1], dtype=np.float64)
+        )
         vals = data.values
 
         total_az = len(azimuth)
@@ -1557,14 +1655,16 @@ class ConnectionHandler:
                     out_row.append(round(float(v), 6))
             out_vals.append(out_row)
 
-        await self.send({
-            "type": "data_table_result",
-            "azimuths": [round(float(a), 4) for a in sliced_az],
-            "ranges": [round(float(r), 4) for r in sliced_rng],
-            "values": out_vals,
-            "total_az": total_az,
-            "total_range": total_range,
-        })
+        await self.send(
+            {
+                "type": "data_table_result",
+                "azimuths": [round(float(a), 4) for a in sliced_az],
+                "ranges": [round(float(r), 4) for r in sliced_rng],
+                "values": out_vals,
+                "total_az": total_az,
+                "total_range": total_range,
+            }
+        )
 
     # ------------------------------------------------------------------
     # Metadata tree handler — full DataTree structure as nested dict
@@ -1655,22 +1755,26 @@ class ConnectionHandler:
                 # Variable-level attributes as children
                 attr_children = []
                 for ak, av in da.attrs.items():
-                    attr_children.append({
-                        "name": str(ak),
-                        "type": "attribute",
-                        "value": _serializable(av),
-                    })
+                    attr_children.append(
+                        {
+                            "name": str(ak),
+                            "type": "attribute",
+                            "value": _serializable(av),
+                        }
+                    )
                 if attr_children:
                     child["children"] = attr_children
                 result["children"].append(child)
 
             # Dataset-level attributes
             for ak, av in ds.attrs.items():
-                result["children"].append({
-                    "name": str(ak),
-                    "type": "attribute",
-                    "value": _serializable(av),
-                })
+                result["children"].append(
+                    {
+                        "name": str(ak),
+                        "type": "attribute",
+                        "value": _serializable(av),
+                    }
+                )
 
             # Recurse into children
             if hasattr(node, "children"):
@@ -1682,13 +1786,18 @@ class ConnectionHandler:
 
         loop = asyncio.get_running_loop()
         tree_data = await loop.run_in_executor(
-            None, _build_node, "root", dtree,
+            None,
+            _build_node,
+            "root",
+            dtree,
         )
 
-        await self.send({
-            "type": "metadata_tree_result",
-            "tree": tree_data.get("children", []),
-        })
+        await self.send(
+            {
+                "type": "metadata_tree_result",
+                "tree": tree_data.get("children", []),
+            }
+        )
 
 
 async def _handle_connection(ws: ServerConnection) -> None:
@@ -1714,9 +1823,7 @@ async def _handle_connection(ws: ServerConnection) -> None:
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         logger.warning("Protocol error from %s: %s", remote, exc)
     except Exception as exc:
-        logger.error(
-            "Unexpected error for %s: %s\n%s", remote, exc, traceback.format_exc()
-        )
+        logger.error("Unexpected error for %s: %s\n%s", remote, exc, traceback.format_exc())
     finally:
         logger.info("Connection from %s closed", remote)
 

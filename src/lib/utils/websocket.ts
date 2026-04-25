@@ -132,7 +132,6 @@ class WebSocketManager {
 
     this.ws.onopen = () => {
       console.log(`[WS] Connected to ${url}`);
-      document.title = `xradar desktop — Connected`;
       connectionStatus.set('connected');
       this.retryCount = 0;
 
@@ -140,14 +139,12 @@ class WebSocketManager {
 
     this.ws.onclose = (event) => {
       console.log(`[WS] Disconnected (code: ${event.code}, reason: ${event.reason})`);
-      document.title = `xradar desktop — WS closed ${event.code}`;
       connectionStatus.set('disconnected');
       this.scheduleReconnect();
     };
 
     this.ws.onerror = (event) => {
       console.error('[WS] Error:', event);
-      document.title = `xradar desktop — WS error (retry ${this.retryCount})`;
     };
 
     this.ws.onmessage = (event) => {
@@ -259,6 +256,7 @@ class WebSocketManager {
         const openedPath = this._pendingOpenPath ?? '';
         this._pendingOpenPath = null;
 
+        processingProgress.set(null);
         clearSweepCache();
         radarData.update((state) => ({
           ...state,

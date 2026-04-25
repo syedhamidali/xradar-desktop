@@ -92,10 +92,12 @@ class TestDatasetToArrow:
         )
 
     def test_multiple_variables(self) -> None:
-        ds = xr.Dataset({
-            "a": (["x"], np.array([1.0, 2.0])),
-            "b": (["x"], np.array([3.0, 4.0])),
-        })
+        ds = xr.Dataset(
+            {
+                "a": (["x"], np.array([1.0, 2.0])),
+                "b": (["x"], np.array([3.0, 4.0])),
+            }
+        )
         raw = dataset_to_arrow(ds)
         batch = _read_ipc_bytes(raw)
         assert "a" in batch.schema.names
@@ -132,9 +134,7 @@ class TestDataArrayToArrow:
         raw = dataarray_to_arrow(da)
         batch = _read_ipc_bytes(raw)
         assert "speed" in batch.schema.names
-        np.testing.assert_array_almost_equal(
-            batch.column("speed").to_numpy(), [5.0, 10.0, 15.0]
-        )
+        np.testing.assert_array_almost_equal(batch.column("speed").to_numpy(), [5.0, 10.0, 15.0])
 
     def test_unnamed_array_uses_data(self) -> None:
         da = xr.DataArray(np.array([1.0, 2.0]), dims=["x"])

@@ -17,9 +17,6 @@ import xarray as xr
 matplotlib.use("Agg")  # Non-interactive backend
 
 import matplotlib.pyplot as plt
-from matplotlib.projections import PolarAxes
-from matplotlib import ticker
-from matplotlib.colors import Normalize, LinearSegmentedColormap
 
 logger = logging.getLogger(__name__)
 
@@ -147,13 +144,9 @@ def _extract_sweep_dataset(
     sweep: int,
 ) -> xr.Dataset:
     """Extract the dataset for a given sweep index."""
-    sweep_nodes = sorted(
-        [n for n in datatree.children if n.startswith("sweep_")]
-    )
+    sweep_nodes = sorted([n for n in datatree.children if n.startswith("sweep_")])
     if sweep < 0 or sweep >= len(sweep_nodes):
-        raise IndexError(
-            f"Sweep {sweep} out of range (0..{len(sweep_nodes) - 1})"
-        )
+        raise IndexError(f"Sweep {sweep} out of range (0..{len(sweep_nodes) - 1})")
     return datatree[sweep_nodes[sweep]].to_dataset()
 
 
@@ -195,6 +188,7 @@ def _count_sweep_nodes(datatree: xr.DataTree) -> int:
 # Publication-quality figure rendering
 # ---------------------------------------------------------------------------
 
+
 def render_publication_figure(
     datatree: xr.DataTree,
     variable: str,
@@ -219,10 +213,7 @@ def render_publication_figure(
         available = list(sweep_ds.data_vars)
         if not available:
             raise ValueError(f"No data variables in sweep {sweep}")
-        raise KeyError(
-            f"Variable '{variable}' not found in sweep {sweep}. "
-            f"Available: {available}"
-        )
+        raise KeyError(f"Variable '{variable}' not found in sweep {sweep}. Available: {available}")
 
     da = sweep_ds[variable]
     values = da.values.astype(np.float64)
@@ -247,11 +238,13 @@ def render_publication_figure(
     # Range edges: midpoints between bins, extended at start/end
     if len(range_km) > 1:
         dr = np.diff(range_km)
-        range_edges = np.concatenate([
-            [range_km[0] - dr[0] / 2],
-            range_km[:-1] + dr / 2,
-            [range_km[-1] + dr[-1] / 2],
-        ])
+        range_edges = np.concatenate(
+            [
+                [range_km[0] - dr[0] / 2],
+                range_km[:-1] + dr / 2,
+                [range_km[-1] + dr[-1] / 2],
+            ]
+        )
     else:
         range_edges = np.array([0, range_km[0] * 2])
 
@@ -276,14 +269,16 @@ def render_publication_figure(
     else:
         plt.rcdefaults()
 
-    plt.rcParams.update({
-        "font.size": font_size,
-        "axes.labelsize": font_size,
-        "axes.titlesize": font_size + 2,
-        "xtick.labelsize": font_size - 2,
-        "ytick.labelsize": font_size - 2,
-        "figure.titlesize": font_size + 4,
-    })
+    plt.rcParams.update(
+        {
+            "font.size": font_size,
+            "axes.labelsize": font_size,
+            "axes.titlesize": font_size + 2,
+            "xtick.labelsize": font_size - 2,
+            "ytick.labelsize": font_size - 2,
+            "figure.titlesize": font_size + 4,
+        }
+    )
 
     fig, ax = plt.subplots(
         figsize=(fig_size, fig_size),
@@ -292,7 +287,9 @@ def render_publication_figure(
 
     # Plot PPI
     mesh = ax.pcolormesh(
-        x, y, values,
+        x,
+        y,
+        values,
         cmap=cmap_name,
         vmin=vmin,
         vmax=vmax,
@@ -340,10 +337,46 @@ def render_publication_figure(
 
         # Cardinal direction labels
         offset = max_r * 1.05
-        ax.text(0, offset, "N", ha="center", va="bottom", fontsize=font_size - 1, fontweight="bold", color="gray")
-        ax.text(0, -offset, "S", ha="center", va="top", fontsize=font_size - 1, fontweight="bold", color="gray")
-        ax.text(offset, 0, "E", ha="left", va="center", fontsize=font_size - 1, fontweight="bold", color="gray")
-        ax.text(-offset, 0, "W", ha="right", va="center", fontsize=font_size - 1, fontweight="bold", color="gray")
+        ax.text(
+            0,
+            offset,
+            "N",
+            ha="center",
+            va="bottom",
+            fontsize=font_size - 1,
+            fontweight="bold",
+            color="gray",
+        )
+        ax.text(
+            0,
+            -offset,
+            "S",
+            ha="center",
+            va="top",
+            fontsize=font_size - 1,
+            fontweight="bold",
+            color="gray",
+        )
+        ax.text(
+            offset,
+            0,
+            "E",
+            ha="left",
+            va="center",
+            fontsize=font_size - 1,
+            fontweight="bold",
+            color="gray",
+        )
+        ax.text(
+            -offset,
+            0,
+            "W",
+            ha="right",
+            va="center",
+            fontsize=font_size - 1,
+            fontweight="bold",
+            color="gray",
+        )
 
     # Colorbar
     if show_colorbar:
@@ -387,6 +420,7 @@ def _pick_ring_interval_km(max_range_km: float) -> float:
 # Main exporter class
 # ---------------------------------------------------------------------------
 
+
 class RadarExporter:
     """Export radar data to image, data, and animation formats.
 
@@ -410,9 +444,7 @@ class RadarExporter:
         if not isinstance(fmt, str) or not fmt.strip():
             raise ValueError("Export format must be a non-empty string")
         if not isinstance(dpi, int) or dpi < MIN_DPI or dpi > MAX_DPI:
-            raise ValueError(
-                f"DPI must be an integer between {MIN_DPI} and {MAX_DPI}, got {dpi}"
-            )
+            raise ValueError(f"DPI must be an integer between {MIN_DPI} and {MAX_DPI}, got {dpi}")
         if not isinstance(sweep, int) or sweep < 0:
             raise ValueError(f"Sweep must be a non-negative integer, got {sweep}")
 
@@ -441,8 +473,7 @@ class RadarExporter:
         handler = dispatch.get(fmt)
         if handler is None:
             raise ValueError(
-                f"Unsupported export format '{fmt}'. "
-                f"Supported: {sorted(dispatch.keys())}"
+                f"Unsupported export format '{fmt}'. Supported: {sorted(dispatch.keys())}"
             )
         return handler(
             datatree,
@@ -478,7 +509,7 @@ class RadarExporter:
         show_rings = options.get("show_rings", True)
         show_colorbar = options.get("show_colorbar", True)
         show_title = options.get("show_title", True)
-        title_override = options.get("title", None)
+        title_override = options.get("title")
         dark_bg = options.get("dark_background", False)
 
         progress(30, "Rendering figure")
@@ -500,9 +531,7 @@ class RadarExporter:
         progress(70, "Saving file")
 
         if output_path is None:
-            fd, output_path = tempfile.mkstemp(
-                suffix=f".{fmt}", prefix="xradar_export_"
-            )
+            fd, output_path = tempfile.mkstemp(suffix=f".{fmt}", prefix="xradar_export_")
             os.close(fd)
 
         fig.savefig(
@@ -577,9 +606,7 @@ class RadarExporter:
                     )
                     saved.append(path)
                 except Exception as exc:
-                    logger.warning(
-                        "Batch export failed for %s sweep %d: %s", var, sw, exc
-                    )
+                    logger.warning("Batch export failed for %s sweep %d: %s", var, sw, exc)
                     # Continue with remaining exports
 
         progress(100, f"Batch export complete: {len(saved)}/{total} files")
@@ -611,9 +638,7 @@ class RadarExporter:
             raise ValueError("No sweeps specified for animation")
 
         if output_path is None:
-            fd, output_path = tempfile.mkstemp(
-                suffix=".gif", prefix="xradar_anim_"
-            )
+            fd, output_path = tempfile.mkstemp(suffix=".gif", prefix="xradar_anim_")
             os.close(fd)
 
         frames: list[PILImage.Image] = []
@@ -759,11 +784,13 @@ class RadarExporter:
         az_2d, rng_2d = np.meshgrid(azimuth, range_m, indexing="ij")
         mask = np.isfinite(values)
 
-        df = pd.DataFrame({
-            "azimuth_deg": az_2d[mask].ravel(),
-            "range_m": rng_2d[mask].ravel(),
-            variable: values[mask].ravel(),
-        })
+        df = pd.DataFrame(
+            {
+                "azimuth_deg": az_2d[mask].ravel(),
+                "range_m": rng_2d[mask].ravel(),
+                variable: values[mask].ravel(),
+            }
+        )
 
         progress(70, "Writing CSV")
 
@@ -783,9 +810,7 @@ class RadarExporter:
         datatree: xr.DataTree,
         **kwargs: Any,
     ) -> str:
-        raise NotImplementedError(
-            "GeoTIFF export is planned for a future release"
-        )
+        raise NotImplementedError("GeoTIFF export is planned for a future release")
 
     def _export_zarr(
         self,

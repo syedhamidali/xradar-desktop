@@ -38,30 +38,21 @@
   const sweeps = $derived($radarData.sweeps || []);
 
   // Set default variable/sweep when data changes
-  let _ppVar = 0;
   $effect(() => {
-    _ppVar++;
-    if (_ppVar > 5) console.warn('[DEBUG] Processing var effect:', _ppVar);
     if (variables.length > 0 && !statVariable) {
       statVariable = variables[0];
     }
   });
 
   // Fetch retrievals list when connected and data loaded
-  let _ppFetch = 0;
   $effect(() => {
-    _ppFetch++;
-    if (_ppFetch > 5) console.warn('[DEBUG] Processing fetch effect:', _ppFetch);
     if (canProcess && retrievals.length === 0) {
       fetchRetrievals();
     }
   });
 
   // Update retrieval params when selection changes
-  let _ppParams = 0;
   $effect(() => {
-    _ppParams++;
-    if (_ppParams > 5) console.warn('[DEBUG] Processing params effect:', _ppParams);
     if (selectedRetrieval) {
       const def = retrievals.find(r => r.name === selectedRetrieval);
       if (def) {

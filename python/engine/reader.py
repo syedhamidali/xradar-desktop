@@ -42,9 +42,7 @@ def _get_opener(format_name: str):
         raise ValueError(f"Unknown format: {format_name}")
     opener = getattr(io_mod, func_name, None)
     if opener is None:
-        raise ImportError(
-            f"xradar.io.{func_name} not available in installed xradar version"
-        )
+        raise ImportError(f"xradar.io.{func_name} not available in installed xradar version")
     return opener
 
 
@@ -192,8 +190,6 @@ def _open_generic_netcdf(path: str) -> xr.DataTree:
 
     # Build a single-sweep dataset with xradar-compatible coords
     sweep_ds_vars = {}
-    dims_2d = ds[moment_vars[0]].dims  # e.g. ('radial', 'bin')
-    dim_az, dim_rng = dims_2d[0], dims_2d[1]
 
     for v in moment_vars:
         sweep_ds_vars[v] = xr.DataArray(
@@ -256,9 +252,7 @@ class RadarReader:
         # Directory traversal protection: require absolute paths and ensure
         # the resolved path doesn't escape via '..' tricks.
         if not p.is_absolute():
-            raise ValueError(
-                f"Only absolute file paths are accepted, got: {path}"
-            )
+            raise ValueError(f"Only absolute file paths are accepted, got: {path}")
         resolved = p.resolve()
         # Ensure the resolved path doesn't differ from what we'd expect
         # (e.g. symlink escape).  The key check is that '..' doesn't appear
@@ -266,9 +260,7 @@ class RadarReader:
         # so if the original contains '..' but resolves differently, that's
         # acceptable as long as the resolved target exists.
         if ".." in resolved.parts:
-            raise ValueError(
-                f"Path contains disallowed '..' components: {path}"
-            )
+            raise ValueError(f"Path contains disallowed '..' components: {path}")
 
         if not p.exists():
             raise FileNotFoundError(f"File not found: {path}")
@@ -291,9 +283,7 @@ class RadarReader:
                 last_exc = exc
                 continue
             except Exception as exc:
-                logger.debug(
-                    "Format '%s' failed unexpectedly for %s: %s", fmt, path, exc
-                )
+                logger.debug("Format '%s' failed unexpectedly for %s: %s", fmt, path, exc)
                 last_exc = exc
                 continue
 
@@ -309,10 +299,7 @@ class RadarReader:
         except Exception as exc:
             logger.debug("Generic NetCDF fallback failed: %s", exc)
 
-        raise ValueError(
-            f"Could not open {path} with any supported format. "
-            f"Last error: {last_exc}"
-        )
+        raise ValueError(f"Could not open {path} with any supported format. Last error: {last_exc}")
 
     def get_schema(self) -> dict[str, Any]:
         """Extract metadata from the currently-open datatree.
@@ -334,7 +321,7 @@ class RadarReader:
 
         # Extract variables and dimensions from first sweep only —
         # they're identical across sweeps, so no need to materialise all 23.
-        # Only include actual radar moment variables (2D: azimuth × range),
+        # Only include actual radar moment variables (2D: azimuth x range),
         # excluding scalar metadata like sweep_mode, sweep_number, etc.
         variables: set[str] = set()
         dimensions: dict[str, int] = {}
@@ -401,16 +388,11 @@ class RadarReader:
         self._ensure_open()
         nodes = self._sweep_nodes()
         if sweep < 0 or sweep >= len(nodes):
-            raise IndexError(
-                f"Sweep index {sweep} out of range (0..{len(nodes) - 1})"
-            )
+            raise IndexError(f"Sweep index {sweep} out of range (0..{len(nodes) - 1})")
         ds = nodes[sweep].to_dataset()
         if variable not in ds.data_vars:
             available = sorted(str(v) for v in ds.data_vars)
-            raise KeyError(
-                f"Variable '{variable}' not in sweep {sweep}. "
-                f"Available: {available}"
-            )
+            raise KeyError(f"Variable '{variable}' not in sweep {sweep}. Available: {available}")
         return ds[variable]
 
     @property

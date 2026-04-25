@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 # KDP estimation
 # ---------------------------------------------------------------------------
 
+
 def estimate_kdp(
     phidp: xr.DataArray,
     *,
@@ -96,6 +97,7 @@ def estimate_kdp(
 # ---------------------------------------------------------------------------
 # Rainfall rate estimators
 # ---------------------------------------------------------------------------
+
 
 def rain_rate_z(
     dbz: xr.DataArray,
@@ -224,6 +226,7 @@ def rain_rate_z_zdr(
 # Attenuation correction
 # ---------------------------------------------------------------------------
 
+
 def correct_attenuation_phidp(
     dbz: xr.DataArray,
     phidp: xr.DataArray,
@@ -280,12 +283,12 @@ def correct_attenuation_phidp(
 # Format: {class_name: {variable: (centre, width)}}
 # Simplified trapezoidal membership functions approximated as Gaussians.
 _HID_PARAMS: dict[str, dict[str, tuple[float, float]]] = {
-    "drizzle":  {"DBZH": (15.0, 10.0), "ZDR": (0.3, 0.4), "KDP": (0.0, 0.1), "RHOHV": (0.99, 0.02)},
-    "rain":     {"DBZH": (35.0, 12.0), "ZDR": (1.5, 1.0), "KDP": (0.5, 0.5), "RHOHV": (0.98, 0.02)},
-    "wet_snow": {"DBZH": (30.0, 8.0),  "ZDR": (1.0, 0.8), "KDP": (0.1, 0.2), "RHOHV": (0.90, 0.05)},
+    "drizzle": {"DBZH": (15.0, 10.0), "ZDR": (0.3, 0.4), "KDP": (0.0, 0.1), "RHOHV": (0.99, 0.02)},
+    "rain": {"DBZH": (35.0, 12.0), "ZDR": (1.5, 1.0), "KDP": (0.5, 0.5), "RHOHV": (0.98, 0.02)},
+    "wet_snow": {"DBZH": (30.0, 8.0), "ZDR": (1.0, 0.8), "KDP": (0.1, 0.2), "RHOHV": (0.90, 0.05)},
     "dry_snow": {"DBZH": (20.0, 10.0), "ZDR": (0.3, 0.5), "KDP": (0.0, 0.1), "RHOHV": (0.98, 0.03)},
-    "graupel":  {"DBZH": (42.0, 8.0),  "ZDR": (0.2, 0.5), "KDP": (0.2, 0.3), "RHOHV": (0.95, 0.04)},
-    "hail":     {"DBZH": (55.0, 8.0),  "ZDR": (-0.5, 1.0), "KDP": (0.0, 0.5), "RHOHV": (0.90, 0.06)},
+    "graupel": {"DBZH": (42.0, 8.0), "ZDR": (0.2, 0.5), "KDP": (0.2, 0.3), "RHOHV": (0.95, 0.04)},
+    "hail": {"DBZH": (55.0, 8.0), "ZDR": (-0.5, 1.0), "KDP": (0.0, 0.5), "RHOHV": (0.90, 0.06)},
 }
 
 _HID_CLASS_NAMES = list(_HID_PARAMS.keys())
@@ -368,6 +371,7 @@ def classify_hydrometeors(
 # Echo classification (clutter vs meteorological)
 # ---------------------------------------------------------------------------
 
+
 def classify_echo(
     dbz: xr.DataArray,
     zdr: xr.DataArray | None = None,
@@ -439,7 +443,7 @@ def classify_echo(
     # Build classification array
     result = np.zeros(z.shape, dtype=np.int8)
     result[has_echo & ~is_clutter] = 1  # meteorological
-    result[has_echo & is_clutter] = 2   # clutter
+    result[has_echo & is_clutter] = 2  # clutter
 
     return xr.DataArray(
         result,
@@ -514,8 +518,16 @@ RETRIEVAL_REGISTRY: dict[str, dict[str, Any]] = {
         "required_variables": ["DBZH"],
         "params": {
             "texture_window": {"type": "int", "default": 5, "label": "Texture window (gates)"},
-            "zdr_texture_thresh": {"type": "float", "default": 2.0, "label": "ZDR texture threshold"},
-            "phidp_texture_thresh": {"type": "float", "default": 25.0, "label": "PhiDP texture threshold"},
+            "zdr_texture_thresh": {
+                "type": "float",
+                "default": 2.0,
+                "label": "ZDR texture threshold",
+            },
+            "phidp_texture_thresh": {
+                "type": "float",
+                "default": 25.0,
+                "label": "PhiDP texture threshold",
+            },
             "rhohv_thresh": {"type": "float", "default": 0.7, "label": "RhoHV threshold"},
         },
         "description": "Echo classification (clutter vs meteorological)",
@@ -562,7 +574,6 @@ def run_retrieval(
     required_vars = entry["required_variables"]
 
     # Get sweep dataset
-    sweep_name = f"sweep_{sweep}"
     sweep_nodes = sorted(
         [n for n in datatree.children if n.startswith("sweep_")],
     )

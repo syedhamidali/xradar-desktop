@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy, untrack } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import RadarViewer from './lib/components/RadarViewer.svelte';
   import RadarViewer3D from './lib/components/RadarViewer3D.svelte';
   import DualPolDashboard from './lib/components/DualPolDashboard.svelte';
@@ -79,11 +79,15 @@
     viewMode = config.viewMode;
   }
 
-  // DISABLED: workspace sync effect (debugging infinite loop)
-  // $effect(() => { workspaceStore.updateCurrentConfig({...}); });
-
-  // DISABLED: animation effect (debugging infinite loop)
-  // $effect(() => { if (totalSweeps === 0 && isPlaying) stopAnimation(); });
+  function syncWorkspace() {
+    workspaceStore.updateCurrentConfig({
+      leftSidebarOpen,
+      rightSidebarOpen,
+      leftSidebarWidth,
+      rightSidebarWidth,
+      viewMode,
+    });
+  }
 
   onMount(async () => {
     // Apply saved workspace on startup
@@ -136,9 +140,11 @@
     } else if (ctrl && e.key === 'b') {
       e.preventDefault();
       leftSidebarOpen = !leftSidebarOpen;
+      syncWorkspace();
     } else if (ctrl && e.key === 'e') {
       e.preventDefault();
       rightSidebarOpen = !rightSidebarOpen;
+      syncWorkspace();
     } else if (e.key === ' ' && totalSweeps > 0) {
       e.preventDefault();
       toggleAnimation();
@@ -217,8 +223,8 @@
     if (isPlaying) { stopAnimation(); startAnimation(); }
   }
 
-  function toggleLeftSidebar() { leftSidebarOpen = !leftSidebarOpen; }
-  function toggleRightSidebar() { rightSidebarOpen = !rightSidebarOpen; }
+  function toggleLeftSidebar() { leftSidebarOpen = !leftSidebarOpen; syncWorkspace(); }
+  function toggleRightSidebar() { rightSidebarOpen = !rightSidebarOpen; syncWorkspace(); }
 
   // --- Resizable sidebar handlers ---
   function startResizeLeft(e: MouseEvent) {
@@ -258,6 +264,7 @@
     document.body.style.userSelect = '';
     window.removeEventListener('mousemove', onResizeMove);
     window.removeEventListener('mouseup', onResizeEnd);
+    syncWorkspace();
   }
 
   function resetLeftWidth() { leftSidebarWidth = SIDEBAR_DEFAULT; }
@@ -329,9 +336,9 @@
       <div class="toolbar-separator"></div>
 
       <div class="view-toggle">
-        <button class="view-btn" class:active={viewMode === '2d'} on:click={() => viewMode = '2d'} title="2D PPI View">2D</button>
-        <button class="view-btn" class:active={viewMode === '3d'} on:click={() => viewMode = '3d'} title="3D Volume View">3D</button>
-        <button class="view-btn" class:active={viewMode === 'dualpol'} on:click={() => viewMode = 'dualpol'} title="Dual-Pol Analysis Dashboard">DualPol</button>
+        <button class="view-btn" class:active={viewMode === '2d'} on:click={() => { viewMode = '2d'; syncWorkspace(); }} title="2D PPI View">2D</button>
+        <button class="view-btn" class:active={viewMode === '3d'} on:click={() => { viewMode = '3d'; syncWorkspace(); }} title="3D Volume View">3D</button>
+        <button class="view-btn" class:active={viewMode === 'dualpol'} on:click={() => { viewMode = 'dualpol'; syncWorkspace(); }} title="Dual-Pol Analysis Dashboard">DualPol</button>
       </div>
 
       <button class="toolbar-btn icon-btn" class:active={$diffMode === 'diff'} on:click={toggleDiffMode} title="Toggle Diff View">
@@ -430,8 +437,7 @@
       class:collapsed={!rightSidebarOpen}
       style="width: {rightSidebarOpen ? rightSidebarWidth + 'px' : '0'}"
     >
-      <!-- <PanelManager /> -->
-      <div style="padding:12px;color:#888;font-size:11px">Panels disabled for debug</div>
+      <PanelManager />
     </aside>
   </main>
 
@@ -469,7 +475,7 @@
     else if (type === 'toggle-left-sidebar') leftSidebarOpen = !leftSidebarOpen;
     else if (type === 'toggle-right-sidebar') rightSidebarOpen = !rightSidebarOpen;
     else if (type === 'toggle-animation') toggleAnimation();
-    else if (type === 'set-view') viewMode = value;
+    else if (type === 'set-view') { viewMode = value; syncWorkspace(); }
   }} />
   <OnboardingTour bind:visible={onboardingVisible} />
   <ShortcutsSheet bind:visible={shortcutsSheetVisible} />

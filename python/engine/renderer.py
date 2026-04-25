@@ -112,7 +112,7 @@ def _cb_font(size: int) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
     for path in candidates:
         try:
             return ImageFont.truetype(path, size)
-        except (OSError, IOError):
+        except OSError:
             continue
     return ImageFont.load_default()
 
@@ -133,7 +133,7 @@ def _build_colorbar(
     height: int,
 ) -> Image.Image:
     """
-    Build a vertical colorbar strip (RGBA) of size (_CB_STRIP_W × height).
+    Build a vertical colorbar strip (RGBA) of size (_CB_STRIP_W x height).
 
     Layout within the strip:
         [_CB_PAD] [title row ~11 px] [gradient swatch _CB_SWATCH_W wide]
@@ -149,8 +149,8 @@ def _build_colorbar(
     font_title = _cb_font(9)
 
     # Vertical regions
-    title_h = 11        # px at top for variable / unit label
-    bottom_label_h = 11 # px at bottom so the min tick label isn't clipped
+    title_h = 11  # px at top for variable / unit label
+    bottom_label_h = 11  # px at bottom so the min tick label isn't clipped
     grad_y0 = _CB_PAD + title_h
     grad_y1 = height - _CB_PAD - bottom_label_h
     grad_h = max(grad_y1 - grad_y0, 1)
@@ -252,8 +252,7 @@ def _polar_to_cartesian(
     vals = np.asarray(values)
     if vals.shape != (az.size, rng.size):
         raise ValueError(
-            f"values shape {vals.shape} does not match azimuth/range "
-            f"({az.size}, {rng.size})"
+            f"values shape {vals.shape} does not match azimuth/range ({az.size}, {rng.size})"
         )
 
     az_rad = np.deg2rad(az)[:, None]
@@ -422,9 +421,7 @@ class RadarRenderer:
             logger.info("Cache hit for %s sweep=%d %dx%d", variable, sweep, width, height)
             return self._cache[cache_key]
 
-        logger.info(
-            "Rendering variable=%s sweep=%d size=%dx%d", variable, sweep, width, height
-        )
+        logger.info("Rendering variable=%s sweep=%d size=%dx%d", variable, sweep, width, height)
 
         # Extract unit string from xarray attributes (best-effort).
         units: str = str(data.attrs.get("units", data.attrs.get("unit", "")))
@@ -500,11 +497,18 @@ class RadarRenderer:
 
     @staticmethod
     def _pick_ring_interval(max_range_m: float) -> float:
-        """Return a ring spacing (metres) that yields 4–5 rings for *max_range_m*."""
+        """Return a ring spacing (metres) that yields 4-5 rings for *max_range_m*."""
         # Candidate spacings in metres (10 km → 500 km)
         candidates = [
-            10_000, 20_000, 25_000, 50_000,
-            100_000, 150_000, 200_000, 250_000, 500_000,
+            10_000,
+            20_000,
+            25_000,
+            50_000,
+            100_000,
+            150_000,
+            200_000,
+            250_000,
+            500_000,
         ]
         for spacing in candidates:
             n_rings = int(max_range_m / spacing)
@@ -532,8 +536,8 @@ class RadarRenderer:
 
         x_min, x_max = x_range
         y_min, y_max = y_range
-        data_w = x_max - x_min   # metres spanning full image width
-        data_h = y_max - y_min   # metres spanning full image height
+        data_w = x_max - x_min  # metres spanning full image width
+        data_h = y_max - y_min  # metres spanning full image height
 
         def data_to_pixel(xd: float, yd: float) -> tuple[int, int]:
             """Map data-space (metres) to pixel (col, row)."""
@@ -562,29 +566,29 @@ class RadarRenderer:
         overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
 
-        RING_COLOR = (220, 220, 220, 80)    # soft white, semi-transparent
-        CROSS_COLOR = (220, 220, 220, 60)   # slightly more transparent
-        LABEL_COLOR = (255, 255, 255, 200)  # near-opaque white text
-        RING_WIDTH = 1
-        CROSS_WIDTH = 1
+        ring_color = (220, 220, 220, 80)  # soft white, semi-transparent
+        cross_color = (220, 220, 220, 60)  # slightly more transparent
+        label_color = (255, 255, 255, 200)  # near-opaque white text
+        ring_width = 1
+        cross_width = 1
 
         # Attempt to load a small font; fall back to PIL's built-in bitmap font
         try:
             font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", size=11)
-        except (OSError, IOError):
+        except OSError:
             try:
                 font = ImageFont.truetype("arial.ttf", size=11)
-            except (OSError, IOError):
+            except OSError:
                 font = ImageFont.load_default()
 
         # --- Range rings ---
         for r_m in ring_radii_m:
             r_px = metres_to_px_radius(r_m)
             bbox = [cx - r_px, cy - r_px, cx + r_px, cy + r_px]
-            draw.ellipse(bbox, outline=RING_COLOR, width=RING_WIDTH)
+            draw.ellipse(bbox, outline=ring_color, width=ring_width)
 
             # Label at the top of the ring (12 o'clock position)
-            label = f"{int(round(r_m / 1000))} km"
+            label = f"{round(r_m / 1000)} km"
             label_x = cx
             label_y = cy - r_px
 
@@ -600,23 +604,21 @@ class RadarRenderer:
             draw.text(
                 (label_x - text_w / 2, label_y - text_h - 2),
                 label,
-                fill=LABEL_COLOR,
+                fill=label_color,
                 font=font,
             )
 
         # --- Crosshair ---
         # Horizontal line across full image
-        draw.line([(0, cy), (w - 1, cy)], fill=CROSS_COLOR, width=CROSS_WIDTH)
+        draw.line([(0, cy), (w - 1, cy)], fill=cross_color, width=cross_width)
         # Vertical line across full image
-        draw.line([(cx, 0), (cx, h - 1)], fill=CROSS_COLOR, width=CROSS_WIDTH)
+        draw.line([(cx, 0), (cx, h - 1)], fill=cross_color, width=cross_width)
 
         # Composite overlay onto the radar image
         result = Image.alpha_composite(img, overlay)
         return result
 
-    def _empty_result(
-        self, variable: str, sweep: int, width: int, height: int
-    ) -> dict[str, Any]:
+    def _empty_result(self, variable: str, sweep: int, width: int, height: int) -> dict[str, Any]:
         img = Image.new("RGBA", (width, height), (0, 0, 0, 255))
         buf = io.BytesIO()
         img.save(buf, format=PNG_FORMAT)

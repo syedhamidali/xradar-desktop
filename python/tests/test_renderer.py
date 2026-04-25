@@ -140,9 +140,7 @@ class TestRendererParameterBounds:
 
     def test_render_returns_base64_png(self, synthetic_dataarray: xr.DataArray) -> None:
         renderer = RadarRenderer()
-        result = renderer.render_sweep(
-            synthetic_dataarray, "DBZH", sweep=0, width=200, height=200
-        )
+        result = renderer.render_sweep(synthetic_dataarray, "DBZH", sweep=0, width=200, height=200)
         assert "image" in result
         # Verify it's valid base64 by decoding
         import base64
@@ -153,9 +151,7 @@ class TestRendererParameterBounds:
 
     def test_render_respects_dimensions(self, synthetic_dataarray: xr.DataArray) -> None:
         renderer = RadarRenderer()
-        result = renderer.render_sweep(
-            synthetic_dataarray, "DBZH", sweep=0, width=64, height=64
-        )
+        result = renderer.render_sweep(synthetic_dataarray, "DBZH", sweep=0, width=64, height=64)
         assert result["metadata"]["width"] == 64
         assert result["metadata"]["height"] == 64
 

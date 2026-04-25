@@ -114,9 +114,7 @@ class TestOpenFileRouting:
     @pytest.mark.asyncio
     async def test_open_file_nonexistent(self) -> None:
         handler, _ = _make_handler()
-        await handler.handle_message(
-            json.dumps({"type": "open_file", "path": "/no/such/file.nc"})
-        )
+        await handler.handle_message(json.dumps({"type": "open_file", "path": "/no/such/file.nc"}))
         # Should get progress then error
         errors = [m for m in handler._sent if m["type"] == "error"]
         assert len(errors) >= 1
@@ -148,9 +146,7 @@ class TestExportRouting:
         handler, _ = _make_handler()
         with patch("server._shared_reader") as mock_reader:
             mock_reader.datatree = None
-            await handler.handle_message(
-                json.dumps({"type": "export", "format": "png"})
-            )
+            await handler.handle_message(json.dumps({"type": "export", "format": "png"}))
         errors = [m for m in handler._sent if m["type"] == "error"]
         assert len(errors) >= 1
         assert "no file" in errors[0]["message"].lower()
@@ -165,9 +161,7 @@ class TestProcessRouting:
     @pytest.mark.asyncio
     async def test_process_invalid_pipeline(self) -> None:
         handler, _ = _make_handler()
-        await handler.handle_message(
-            json.dumps({"type": "process", "pipeline": "not_a_dict"})
-        )
+        await handler.handle_message(json.dumps({"type": "process", "pipeline": "not_a_dict"}))
         assert handler._sent[0]["type"] == "error"
 
     @pytest.mark.asyncio
@@ -175,8 +169,6 @@ class TestProcessRouting:
         handler, _ = _make_handler()
         with patch("server._shared_reader") as mock_reader:
             mock_reader.datatree = None
-            await handler.handle_message(
-                json.dumps({"type": "process", "pipeline": {}})
-            )
+            await handler.handle_message(json.dumps({"type": "process", "pipeline": {}}))
         errors = [m for m in handler._sent if m["type"] == "error"]
         assert len(errors) >= 1

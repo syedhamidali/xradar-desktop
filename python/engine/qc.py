@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 # Individual QC algorithms
 # ======================================================================
 
+
 def despeckle(
     data: xr.DataArray,
     window_size: int = 3,
@@ -273,17 +274,52 @@ QC_REGISTRY: dict[str, dict[str, Any]] = {
         "function": despeckle,
         "description": "Remove isolated noisy pixels using median filter comparison",
         "params": {
-            "window_size": {"type": "int", "default": 3, "label": "Window size", "min": 3, "max": 11},
-            "threshold": {"type": "float", "default": 0.5, "label": "Threshold (std devs)", "min": 0.1, "max": 5.0},
+            "window_size": {
+                "type": "int",
+                "default": 3,
+                "label": "Window size",
+                "min": 3,
+                "max": 11,
+            },
+            "threshold": {
+                "type": "float",
+                "default": 0.5,
+                "label": "Threshold (std devs)",
+                "min": 0.1,
+                "max": 5.0,
+            },
         },
-        "applicable_variables": ["DBZH", "DBZ", "ZH", "DBZV", "ZDR", "KDP", "PHIDP", "RHOHV", "VRADH", "VRAD"],
+        "applicable_variables": [
+            "DBZH",
+            "DBZ",
+            "ZH",
+            "DBZV",
+            "ZDR",
+            "KDP",
+            "PHIDP",
+            "RHOHV",
+            "VRADH",
+            "VRAD",
+        ],
     },
     "remove_clutter": {
         "function": remove_clutter,
         "description": "Mask ground clutter using texture analysis and RhoHV",
         "params": {
-            "texture_threshold": {"type": "float", "default": 0.3, "label": "Texture threshold", "min": 0.05, "max": 1.0},
-            "rhohv_threshold": {"type": "float", "default": 0.7, "label": "RhoHV threshold", "min": 0.3, "max": 1.0},
+            "texture_threshold": {
+                "type": "float",
+                "default": 0.3,
+                "label": "Texture threshold",
+                "min": 0.05,
+                "max": 1.0,
+            },
+            "rhohv_threshold": {
+                "type": "float",
+                "default": 0.7,
+                "label": "RhoHV threshold",
+                "min": 0.3,
+                "max": 1.0,
+            },
         },
         "applicable_variables": ["DBZH", "DBZ", "ZH", "DBZV", "ZDR"],
     },
@@ -291,7 +327,13 @@ QC_REGISTRY: dict[str, dict[str, Any]] = {
         "function": velocity_dealiasing,
         "description": "Region-based velocity dealiasing using Nyquist interval",
         "params": {
-            "nyquist_vel": {"type": "float", "default": 25.0, "label": "Nyquist velocity (m/s)", "min": 1.0, "max": 100.0},
+            "nyquist_vel": {
+                "type": "float",
+                "default": 25.0,
+                "label": "Nyquist velocity (m/s)",
+                "min": 1.0,
+                "max": 100.0,
+            },
         },
         "applicable_variables": ["VRADH", "VRAD", "V", "VEL"],
     },
@@ -299,7 +341,13 @@ QC_REGISTRY: dict[str, dict[str, Any]] = {
         "function": noise_removal,
         "description": "Mask values below the noise floor threshold",
         "params": {
-            "noise_floor_dbz": {"type": "float", "default": -10.0, "label": "Noise floor (dBZ)", "min": -40.0, "max": 10.0},
+            "noise_floor_dbz": {
+                "type": "float",
+                "default": -10.0,
+                "label": "Noise floor (dBZ)",
+                "min": -40.0,
+                "max": 10.0,
+            },
         },
         "applicable_variables": ["DBZH", "DBZ", "ZH", "DBZV"],
     },
@@ -313,19 +361,64 @@ QC_REGISTRY: dict[str, dict[str, Any]] = {
         "function": smooth_data,
         "description": "Apply Gaussian or median smoothing to reduce noise",
         "params": {
-            "method": {"type": "str", "default": "gaussian", "label": "Method", "options": ["gaussian", "median"]},
-            "sigma": {"type": "float", "default": 1.0, "label": "Sigma / kernel size", "min": 0.5, "max": 5.0},
+            "method": {
+                "type": "str",
+                "default": "gaussian",
+                "label": "Method",
+                "options": ["gaussian", "median"],
+            },
+            "sigma": {
+                "type": "float",
+                "default": 1.0,
+                "label": "Sigma / kernel size",
+                "min": 0.5,
+                "max": 5.0,
+            },
         },
-        "applicable_variables": ["DBZH", "DBZ", "ZH", "DBZV", "ZDR", "KDP", "PHIDP", "RHOHV", "VRADH", "VRAD"],
+        "applicable_variables": [
+            "DBZH",
+            "DBZ",
+            "ZH",
+            "DBZV",
+            "ZDR",
+            "KDP",
+            "PHIDP",
+            "RHOHV",
+            "VRADH",
+            "VRAD",
+        ],
     },
     "threshold_filter": {
         "function": threshold_filter,
         "description": "Mask values outside a specified min/max range",
         "params": {
-            "vmin": {"type": "float", "default": None, "label": "Minimum value", "min": -100.0, "max": 200.0},
-            "vmax": {"type": "float", "default": None, "label": "Maximum value", "min": -100.0, "max": 200.0},
+            "vmin": {
+                "type": "float",
+                "default": None,
+                "label": "Minimum value",
+                "min": -100.0,
+                "max": 200.0,
+            },
+            "vmax": {
+                "type": "float",
+                "default": None,
+                "label": "Maximum value",
+                "min": -100.0,
+                "max": 200.0,
+            },
         },
-        "applicable_variables": ["DBZH", "DBZ", "ZH", "DBZV", "ZDR", "KDP", "PHIDP", "RHOHV", "VRADH", "VRAD"],
+        "applicable_variables": [
+            "DBZH",
+            "DBZ",
+            "ZH",
+            "DBZV",
+            "ZDR",
+            "KDP",
+            "PHIDP",
+            "RHOHV",
+            "VRADH",
+            "VRAD",
+        ],
     },
 }
 
@@ -333,6 +426,7 @@ QC_REGISTRY: dict[str, dict[str, Any]] = {
 # ======================================================================
 # QC Pipeline Builder
 # ======================================================================
+
 
 class QCPipeline:
     """Composable QC pipeline that chains multiple steps in order.
@@ -427,7 +521,7 @@ class QCPipeline:
         return [{"name": s["name"], "params": s["params"]} for s in self._steps]
 
     @classmethod
-    def from_dict(cls, steps: list[dict[str, Any]]) -> "QCPipeline":
+    def from_dict(cls, steps: list[dict[str, Any]]) -> QCPipeline:
         """Deserialise a pipeline from a list of step dicts."""
         pipeline = cls()
         for step in steps:

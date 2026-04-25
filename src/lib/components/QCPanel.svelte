@@ -52,20 +52,14 @@
   const currentSweep = $derived($selectedSweep);
 
   // Fetch QC algorithms when connected and data loaded
-  let _qcAlgo = 0;
   $effect(() => {
-    _qcAlgo++;
-    if (_qcAlgo > 5) console.warn('[DEBUG] QC algo effect:', _qcAlgo);
     if (hasData && isConnected && algorithms.length === 0) {
       fetchAlgorithms();
     }
   });
 
   // Load presets from localStorage
-  let _qcPresets = 0;
   $effect(() => {
-    _qcPresets++;
-    if (_qcPresets > 5) console.warn('[DEBUG] QC presets effect:', _qcPresets);
     if (typeof window !== 'undefined') {
       try {
         const saved = localStorage.getItem('xradar-qc-presets');

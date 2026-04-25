@@ -121,8 +121,16 @@ def compute_difference(
     abs_max = max(abs(vmin), abs(vmax))
 
     # Get coordinate arrays for the client
-    az1 = da1.coords["azimuth"].values.astype(np.float32) if "azimuth" in da1.coords else np.arange(min_az, dtype=np.float32)
-    rng1 = da1.coords["range"].values.astype(np.float32) if "range" in da1.coords else np.arange(min_rng, dtype=np.float32)
+    az1 = (
+        da1.coords["azimuth"].values.astype(np.float32)
+        if "azimuth" in da1.coords
+        else np.arange(min_az, dtype=np.float32)
+    )
+    rng1 = (
+        da1.coords["range"].values.astype(np.float32)
+        if "range" in da1.coords
+        else np.arange(min_rng, dtype=np.float32)
+    )
     az1 = az1[:min_az]
     rng1 = rng1[:min_rng]
 
@@ -324,8 +332,15 @@ def _extract_timestamp(reader: Any) -> str | None:
         attrs = root_ds.attrs
 
         # Common attribute names for radar file timestamps
-        for key in ("time_coverage_start", "time", "date", "timestamp",
-                     "scan_time", "start_datetime", "start_time"):
+        for key in (
+            "time_coverage_start",
+            "time",
+            "date",
+            "timestamp",
+            "scan_time",
+            "start_datetime",
+            "start_time",
+        ):
             if key in attrs:
                 return str(attrs[key])
 

@@ -143,15 +143,16 @@ def _to_flat_arrow(values: Any, name: str) -> pa.Array | None:
     try:
         return pa.array(flat)
     except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError) as exc:
-        logger.debug(
-            "Could not convert '%s' (dtype=%s) to Arrow: %s", name, flat.dtype, exc
-        )
+        logger.debug("Could not convert '%s' (dtype=%s) to Arrow: %s", name, flat.dtype, exc)
         # Try converting to float64 as a fallback
         try:
             return pa.array(flat.astype(np.float64))
         except (
-            pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError,
-            ValueError, TypeError,
+            pa.ArrowInvalid,
+            pa.ArrowTypeError,
+            pa.ArrowNotImplementedError,
+            ValueError,
+            TypeError,
         ):
             logger.warning("Skipping column '%s' — cannot convert to Arrow", name)
             return None

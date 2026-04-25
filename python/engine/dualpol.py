@@ -184,16 +184,15 @@ def histogram_data(
     vmax = float(np.max(valid))
 
     # Skewness: Fisher's definition
-    if std > 0 and len(valid) > 2:
-        skewness = float(np.mean(((valid - mean) / std) ** 3))
-    else:
-        skewness = 0.0
+    skewness = float(np.mean(((valid - mean) / std) ** 3)) if std > 0 and len(valid) > 2 else 0.0
 
     # Gaussian fit: use mean and std
     bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
     bin_width = float(bin_edges[1] - bin_edges[0])
     gaussian = (
-        len(valid) * bin_width / (std * np.sqrt(2 * np.pi))
+        len(valid)
+        * bin_width
+        / (std * np.sqrt(2 * np.pi))
         * np.exp(-0.5 * ((bin_centers - mean) / std) ** 2)
     )
 
@@ -211,7 +210,7 @@ def histogram_data(
             "skewness": skewness,
         },
         "units": str(da.attrs.get("units", "")),
-        "n_valid": int(len(valid)),
+        "n_valid": len(valid),
     }
 
 
@@ -250,8 +249,16 @@ def region_stats(
         raise ValueError(f"Variable '{variable}' not found in sweep {sweep}")
 
     # Get coordinate arrays
-    az = da.coords["azimuth"].values if "azimuth" in da.coords else np.arange(da.shape[0], dtype=np.float64)
-    rng = da.coords["range"].values if "range" in da.coords else np.arange(da.shape[-1], dtype=np.float64)
+    az = (
+        da.coords["azimuth"].values
+        if "azimuth" in da.coords
+        else np.arange(da.shape[0], dtype=np.float64)
+    )
+    rng = (
+        da.coords["range"].values
+        if "range" in da.coords
+        else np.arange(da.shape[-1], dtype=np.float64)
+    )
 
     # Build mask for region
     if az_min <= az_max:
@@ -287,9 +294,9 @@ def region_stats(
             "min": float(np.min(valid)),
             "max": float(np.max(valid)),
             "skewness": float(np.mean(((valid - mean) / max(std, 1e-9)) ** 3)),
-            "count": int(len(valid)),
+            "count": len(valid),
         },
-        "n_valid": int(len(valid)),
-        "n_total": int(len(vals)),
+        "n_valid": len(valid),
+        "n_total": len(vals),
         "units": str(da.attrs.get("units", "")),
     }

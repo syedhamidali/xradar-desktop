@@ -41,10 +41,7 @@
   let vpVariables = $state<string[]>([]);
 
   // Initialize CS variable to match selected variable
-  let _csInit = 0;
   $effect(() => {
-    _csInit++;
-    if (_csInit > 5) console.warn('[DEBUG] CS init effect:', _csInit);
     if (variable && !csVariable) {
       csVariable = variable;
       csCmap = getDefaultCmap(variable);
@@ -54,10 +51,7 @@
   });
 
   // When CS variable changes, update colormap
-  let _csCmap = 0;
   $effect(() => {
-    _csCmap++;
-    if (_csCmap > 5) console.warn('[DEBUG] CS cmap effect:', _csCmap);
     if (csVariable) {
       csCmap = getDefaultCmap(csVariable);
       const range = getDefaultRange(csVariable);
@@ -66,10 +60,7 @@
   });
 
   // VP multi-select: default to current variable
-  let _csVp = 0;
   $effect(() => {
-    _csVp++;
-    if (_csVp > 5) console.warn('[DEBUG] CS vp effect:', _csVp);
     if (variable && vpVariables.length === 0) {
       vpVariables = [variable];
     }

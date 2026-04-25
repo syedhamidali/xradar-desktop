@@ -156,9 +156,12 @@ def extract_volume(
 
         # Mask: inside bounding box AND finite values
         mask = (
-            (x >= x_min) & (x <= x_max)
-            & (y >= y_min) & (y <= y_max)
-            & (z >= z_min) & (z <= z_max)
+            (x >= x_min)
+            & (x <= x_max)
+            & (y >= y_min)
+            & (y <= y_max)
+            & (z >= z_min)
+            & (z <= z_max)
             & np.isfinite(values)
         )
 
@@ -175,11 +178,17 @@ def extract_volume(
         empty = np.full(nx * ny * nz, NODATA, dtype=np.float32)
         return {
             "data": empty,
-            "nx": nx, "ny": ny, "nz": nz,
-            "x_min": x_min, "x_max": x_max,
-            "y_min": y_min, "y_max": y_max,
-            "z_min": z_min, "z_max": z_max,
-            "vmin": 0.0, "vmax": 0.0,
+            "nx": nx,
+            "ny": ny,
+            "nz": nz,
+            "x_min": x_min,
+            "x_max": x_max,
+            "y_min": y_min,
+            "y_max": y_max,
+            "z_min": z_min,
+            "z_max": z_max,
+            "vmin": 0.0,
+            "vmax": 0.0,
         }
 
     pts_x = np.concatenate(all_x)
@@ -189,7 +198,10 @@ def extract_volume(
 
     logger.info(
         "Volume interpolation: %d scattered points -> (%d, %d, %d) grid",
-        len(pts_v), nx, ny, nz,
+        len(pts_v),
+        nx,
+        ny,
+        nz,
     )
 
     # Build the regular grid
@@ -222,11 +234,17 @@ def extract_volume(
 
     return {
         "data": flat,
-        "nx": nx, "ny": ny, "nz": nz,
-        "x_min": x_min, "x_max": x_max,
-        "y_min": y_min, "y_max": y_max,
-        "z_min": z_min, "z_max": z_max,
-        "vmin": vmin, "vmax": vmax,
+        "nx": nx,
+        "ny": ny,
+        "nz": nz,
+        "x_min": x_min,
+        "x_max": x_max,
+        "y_min": y_min,
+        "y_max": y_max,
+        "z_min": z_min,
+        "z_max": z_max,
+        "vmin": vmin,
+        "vmax": vmax,
     }
 
 
@@ -287,12 +305,16 @@ def extract_cross_section_3d(
 
     # Expand the bounding box to include the corridor
     corners_x = [
-        sx - px * half_w, sx + px * half_w,
-        ex - px * half_w, ex + px * half_w,
+        sx - px * half_w,
+        sx + px * half_w,
+        ex - px * half_w,
+        ex + px * half_w,
     ]
     corners_y = [
-        sy - py * half_w, sy + py * half_w,
-        ey - py * half_w, ey + py * half_w,
+        sy - py * half_w,
+        sy + py * half_w,
+        ey - py * half_w,
+        ey + py * half_w,
     ]
     box_x_min = min(corners_x)
     box_x_max = max(corners_x)
@@ -347,9 +369,12 @@ def extract_cross_section_3d(
 
         # Broad bounding-box filter first
         mask = (
-            (x >= box_x_min) & (x <= box_x_max)
-            & (y >= box_y_min) & (y <= box_y_max)
-            & (z >= z_min_val) & (z <= z_max)
+            (x >= box_x_min)
+            & (x <= box_x_max)
+            & (y >= box_y_min)
+            & (y <= box_y_max)
+            & (z >= z_min_val)
+            & (z <= z_max)
             & np.isfinite(values)
         )
         if not np.any(mask):
@@ -380,10 +405,14 @@ def extract_cross_section_3d(
         empty = np.full(n_dist * n_z, NODATA, dtype=np.float32)
         return {
             "data": empty,
-            "n_dist": n_dist, "n_z": n_z,
-            "dist_min": 0.0, "dist_max": float(line_len),
-            "z_min": z_min_val, "z_max": float(z_max),
-            "vmin": 0.0, "vmax": 0.0,
+            "n_dist": n_dist,
+            "n_z": n_z,
+            "dist_min": 0.0,
+            "dist_max": float(line_len),
+            "z_min": z_min_val,
+            "z_max": float(z_max),
+            "vmin": 0.0,
+            "vmax": 0.0,
         }
 
     pts_d = np.concatenate(all_d)
@@ -392,7 +421,9 @@ def extract_cross_section_3d(
 
     logger.info(
         "Cross-section 3D: %d scattered points -> (%d, %d) grid",
-        len(pts_v), n_dist, n_z,
+        len(pts_v),
+        n_dist,
+        n_z,
     )
 
     gd = np.linspace(0, line_len, n_dist)
@@ -416,8 +447,12 @@ def extract_cross_section_3d(
 
     return {
         "data": flat,
-        "n_dist": n_dist, "n_z": n_z,
-        "dist_min": 0.0, "dist_max": float(line_len),
-        "z_min": z_min_val, "z_max": float(z_max),
-        "vmin": vmin, "vmax": vmax,
+        "n_dist": n_dist,
+        "n_z": n_z,
+        "dist_min": 0.0,
+        "dist_max": float(line_len),
+        "z_min": z_min_val,
+        "z_max": float(z_max),
+        "vmin": vmin,
+        "vmax": vmax,
     }

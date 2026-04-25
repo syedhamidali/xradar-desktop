@@ -46,9 +46,7 @@ class TestFormatSelection:
 
 
 class TestImageExport:
-    def test_png_creates_file(
-        self, synthetic_datatree: xr.DataTree, tmp_output_file: Path
-    ) -> None:
+    def test_png_creates_file(self, synthetic_datatree: xr.DataTree, tmp_output_file: Path) -> None:
         exporter = RadarExporter()
         result = exporter.export(
             synthetic_datatree,
@@ -100,9 +98,7 @@ class TestImageExport:
                 sweep=0,
             )
 
-    def test_png_generates_temp_path_when_none(
-        self, synthetic_datatree: xr.DataTree
-    ) -> None:
+    def test_png_generates_temp_path_when_none(self, synthetic_datatree: xr.DataTree) -> None:
         exporter = RadarExporter()
         result = exporter.export(
             synthetic_datatree,
@@ -143,9 +139,7 @@ class TestImageExport:
 
 
 class TestPathValidation:
-    def test_output_path_is_resolved(
-        self, synthetic_datatree: xr.DataTree, tmp_path: Path
-    ) -> None:
+    def test_output_path_is_resolved(self, synthetic_datatree: xr.DataTree, tmp_path: Path) -> None:
         exporter = RadarExporter()
         relative_ish = str(tmp_path / "subdir" / ".." / "out.png")
         # Ensure parent exists

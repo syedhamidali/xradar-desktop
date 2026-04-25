@@ -75,6 +75,9 @@
   // WebGL renderer
   let ppi: PPIRenderer | null = $state(null);
   let unsubSweepData: (() => void) | null = null;
+  let unsubSweepStore: (() => void) | null = null;
+  let unsubVarStore: (() => void) | null = null;
+  let lastRequestKey = '';
 
   // ── Derived state ─────────────────────────────────────────────────────────
   const variables = $derived($radarData.variables);
@@ -91,47 +94,45 @@
   const radarName = $derived(($radarData.attributes?.instrument_name ?? $radarData.attributes?.station_name ?? '') as string);
 
   // Re-render when map toggle changes (to update transparent background)
-  let _rvRenderCount = 0;
   $effect(() => {
-    _rvRenderCount++;
-    if (_rvRenderCount > 5) console.warn('[DEBUG] RadarViewer render effect:', _rvRenderCount);
     if (hasRendered) {
       void showMap;
       renderFrame();
     }
   });
 
-  // Request sweep data when variable or sweep changes
-  let prevRequestKey = '';
-  let _rvRequestCount = 0;
-  $effect(() => {
-    _rvRequestCount++;
-    if (_rvRequestCount > 5) console.warn('[DEBUG] RadarViewer request effect:', _rvRequestCount);
-    const key = `${variable}:${sweep}`;
-    if (variable && isConnected && key !== prevRequestKey) {
-      prevRequestKey = key;
-      // Update colormap defaults for new variable
-      currentCmap = getDefaultCmap(variable);
-      const range = getDefaultRange(variable);
-      if (range) {
-        currentVmin = range[0];
-        currentVmax = range[1];
-      }
-      // Check cache first
-      const cached = getCachedSweep(variable, sweep);
-      if (cached) {
-        renderSweepData(cached);
-      } else {
-        isLoading = true;
-        wsManager.requestSweepData(variable, sweep);
-      }
+  function requestNewData(v: string, s: number) {
+    const key = `${v}:${s}`;
+    if (!v || key === lastRequestKey) return;
+    lastRequestKey = key;
+    currentCmap = getDefaultCmap(v);
+    const range = getDefaultRange(v);
+    if (range) {
+      currentVmin = range[0];
+      currentVmax = range[1];
     }
-  });
+    const cached = getCachedSweep(v, s);
+    if (cached) {
+      renderSweepData(cached);
+    } else {
+      isLoading = true;
+      wsManager.requestSweepData(v, s);
+    }
+  }
 
   // ── Lifecycle ────────────���────────────────────────���────────────────────────
   onMount(() => {
     unsubSweepData = wsManager.onMessage('sweep_data_ready', (entry: SweepDataEntry) => {
       renderSweepData(entry);
+    });
+
+    // Subscribe to store changes for animation / external sweep updates
+    unsubSweepStore = selectedSweep.subscribe((s) => {
+      const v = $selectedVariable;
+      if (v) requestNewData(v, s);
+    });
+    unsubVarStore = selectedVariable.subscribe((v) => {
+      if (v) requestNewData(v, $selectedSweep);
     });
 
     resizeObserver = new ResizeObserver((entries) => {
@@ -155,6 +156,8 @@
   onDestroy(() => {
     resizeObserver?.disconnect();
     unsubSweepData?.();
+    unsubSweepStore?.();
+    unsubVarStore?.();
     ppi?.destroy();
   });
 
@@ -235,11 +238,15 @@
 
   // ── Event handlers ────────────────────────��────────────────────────────────
   function onVariableChange(e: Event) {
-    selectedVariable.set((e.target as HTMLSelectElement).value);
+    const v = (e.target as HTMLSelectElement).value;
+    selectedVariable.set(v);
+    requestNewData(v, sweep);
   }
 
   function onSweepChange(e: Event) {
-    selectedSweep.set(parseInt((e.target as HTMLSelectElement).value, 10));
+    const s = parseInt((e.target as HTMLSelectElement).value, 10);
+    selectedSweep.set(s);
+    requestNewData(variable!, s);
   }
 
   function onWheel(e: WheelEvent) {
