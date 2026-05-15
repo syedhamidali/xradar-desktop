@@ -30,9 +30,11 @@
 
   onMount(() => {
     unsubWorkspace = currentWorkspace.subscribe((ws) => {
-      panelOrder = ws.rightPanelOrder?.length
-        ? ws.rightPanelOrder.filter((id: string) => PANEL_MAP[id])
-        : Object.keys(PANEL_MAP);
+      const known = Object.keys(PANEL_MAP);
+      const saved = (ws.rightPanelOrder ?? []).filter((id: string) => PANEL_MAP[id]);
+      // Append any newly added panels not yet in saved order
+      const missing = known.filter((id) => !saved.includes(id));
+      panelOrder = saved.length ? [...saved, ...missing] : known;
       panelCollapsed = ws.rightPanelCollapsed ?? {};
     });
   });

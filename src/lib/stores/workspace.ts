@@ -46,7 +46,7 @@ interface WorkspaceManagerState {
 
 // ── Defaults & Presets ────────────────────────────────────────────────────
 
-const DEFAULT_RIGHT_PANELS = ['volume', 'timeseries', 'crosssection', 'qc', 'storm', 'processing', 'export'];
+const DEFAULT_RIGHT_PANELS = ['cloud', 'volume', 'timeseries', 'crosssection', 'qc', 'storm', 'processing', 'export'];
 
 function defaultConfig(name: string): WorkspaceConfig {
   return {
@@ -112,6 +112,12 @@ function loadState(): WorkspaceManagerState {
         if (!parsed.workspaces[key]) {
           parsed.workspaces[key] = preset;
         }
+      }
+      // Inject any newly added panels missing from saved workspaces
+      for (const ws of Object.values(parsed.workspaces)) {
+        const order = ws.rightPanelOrder ?? [];
+        const missing = DEFAULT_RIGHT_PANELS.filter((id) => !order.includes(id));
+        if (missing.length) ws.rightPanelOrder = [...missing, ...order];
       }
       return parsed;
     }

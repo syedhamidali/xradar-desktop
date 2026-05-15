@@ -57,6 +57,15 @@
       loadingFiles = false;
       loadingArco = false;
     });
+
+    // Auto-fetch station list once connected
+    const unsubConn = connectionStatus.subscribe((s) => {
+      if (s === 'connected' && stations.length === 0) {
+        loadingStations = true;
+        wsManager.send({ type: 'list_nexrad_stations' });
+        unsubConn();
+      }
+    });
   });
 
   onDestroy(() => {
@@ -190,11 +199,12 @@
     {#if mode === 'arco'}
       <div class="cdp-section">
         <p class="cdp-hint">
-          Analysis-ready Zarr v3 format from <code>nexrad-arco</code>.
-          ★ stations have ARCO data. Currently includes KLOT (Chicago).
+          <code>nexrad-arco</code> icechunk store. Each entry is a Volume Coverage Pattern
+          (VCP-12, VCP-34…) containing all sweeps for every scan. Opens the latest available scan.
+          Currently KLOT (Chicago) only.
         </p>
         <button class="cdp-btn full" on:click={fetchArcoScans} disabled={!isConnected || loadingArco || !selectedStation}>
-          {loadingArco ? 'Loading…' : 'List Scans'}
+          {loadingArco ? 'Loading…' : 'List VCPs'}
         </button>
 
         {#if arcoScans.length > 0}
@@ -202,11 +212,12 @@
             {#each arcoScans as scan}
               <button class="cdp-file-row" on:click={() => openArcoScan(scan)} disabled={isOpening}>
                 <span class="cdp-file-name">{scan.key}</span>
+                <span class="cdp-file-size">latest</span>
               </button>
             {/each}
           </div>
         {:else if !loadingArco}
-          <p class="cdp-empty">No scans loaded. Click "List Scans".</p>
+          <p class="cdp-empty">No VCPs loaded. Click "List VCPs".</p>
         {/if}
       </div>
     {/if}

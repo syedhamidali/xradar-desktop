@@ -1,99 +1,121 @@
-"""Cloud data access: AWS NEXRAD Level II (archive + real-time) and NEXRAD ARCO."""
+"""Cloud data access: AWS NEXRAD Level II (archive + real-time) and NEXRAD ARCO.
+
+All S3 listing/downloading uses boto3 (synchronous, no asyncio) to avoid
+event-loop conflicts when called from run_in_executor thread-pool threads.
+"""
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
-
-import s3fs
 
 logger = logging.getLogger(__name__)
 
-# ── S3 buckets ───────────────────────────────────────────────────────────────
 _NEXRAD_L2_BUCKET = "noaa-nexrad-level2"
 _NEXRAD_ARCO_BUCKET = "nexrad-arco"
 
-# Anonymous S3 filesystem (no AWS account required)
-_s3 = s3fs.S3FileSystem(anon=True)
+
+def _s3():
+    """Create an anonymous boto3 S3 client (no asyncio, thread-safe)."""
+    import boto3
+    from botocore import UNSIGNED
+    from botocore.config import Config
+
+    return boto3.client(
+        "s3",
+        config=Config(signature_version=UNSIGNED),
+        region_name="us-east-1",
+    )
 
 
-# ── Station helpers ───────────────────────────────────────────────────────────
+# ── Station registry ──────────────────────────────────────────────────────────
+_NEXRAD_STATIONS = [
+    "KABR","KABX","KAKQ","KAMA","KAMX","KAPX","KARX","KATX","KBBX","KBGM",
+    "KBHX","KBIS","KBLX","KBMX","KBOX","KBRO","KBUF","KBYX","KCAE","KCBW",
+    "KCBX","KCCX","KCLE","KCLX","KCRP","KCXX","KCYS","KDAX","KDDC","KDFX",
+    "KDGX","KDIX","KDLH","KDMX","KDOX","KDTX","KDVN","KDYX","KEAX","KEMX",
+    "KENX","KEOX","KEPZ","KESX","KEVX","KEWX","KEYX","KFCX","KFDR","KFDX",
+    "KFFC","KFSD","KFSX","KFTG","KFWS","KGGW","KGJX","KGLD","KGRB","KGRK",
+    "KGRR","KGSP","KGWX","KGYX","KHDX","KHGX","KHNX","KHPX","KHTX","KICT",
+    "KICX","KILN","KILX","KIND","KINX","KIWA","KIWX","KJAX","KJGX","KJKL",
+    "KLBB","KLCH","KLGX","KLIX","KLNX","KLOT","KLRX","KLSX","KLTX","KLVX",
+    "KLWX","KLZK","KMAF","KMAX","KMBX","KMHX","KMKX","KMLB","KMOB","KMPX",
+    "KMQT","KMRX","KMSX","KMTX","KMUX","KMVX","KMXX","KNKX","KNQA","KOAX",
+    "KOHX","KOKX","KOTX","KPAH","KPBZ","KPDT","KPOE","KPUX","KRAX","KRGX",
+    "KRIW","KRLX","KRTX","KSFX","KSGF","KSHV","KSJT","KSOX","KSRX","KTBW",
+    "KTFX","KTLH","KTLX","KTWX","KTYX","KUDX","KUEX","KVAX","KVBX","KVNX",
+    "KVTX","KVWX","KYUX","PABC","PACG","PAEC","PAHG","PAIH","PAKC","PAPD",
+    "PGUA","PHKI","PHKM","PHMO","PHWA","TJUA",
+]
+
+_ARCO_STATIONS: set[str] | None = None
+
 
 def list_nexrad_stations() -> list[dict[str, str]]:
-    """Return NEXRAD stations that have ARCO data, plus the full CONUS list."""
-    # ARCO currently has KLOT; full list for Level II
-    arco_stations = _list_arco_stations()
-    all_l2 = _list_l2_stations_today()
-    merged: dict[str, dict] = {}
-    for s in all_l2:
-        merged[s] = {"id": s, "arco": s in arco_stations}
-    for s in arco_stations:
-        merged[s] = {"id": s, "arco": True}
-    return sorted(merged.values(), key=lambda x: x["id"])
+    """Return full NEXRAD station list, marking which have ARCO data."""
+    arco = _get_arco_stations()
+    return [{"id": s, "arco": s in arco} for s in _NEXRAD_STATIONS]
 
 
-def _list_arco_stations() -> set[str]:
+def _get_arco_stations() -> set[str]:
+    global _ARCO_STATIONS
+    if _ARCO_STATIONS is not None:
+        return _ARCO_STATIONS
     try:
-        entries = _s3.ls(f"{_NEXRAD_ARCO_BUCKET}/", detail=False)
-        return {e.split("/")[-1] for e in entries if not e.endswith(".json")}
+        client = _s3()
+        response = client.list_objects_v2(
+            Bucket=_NEXRAD_ARCO_BUCKET,
+            Delimiter="/",
+            MaxKeys=1000,
+        )
+        _ARCO_STATIONS = {
+            cp["Prefix"].rstrip("/")
+            for cp in response.get("CommonPrefixes", [])
+        }
+        if not _ARCO_STATIONS:
+            _ARCO_STATIONS = {"KLOT"}
     except Exception as exc:
         logger.warning("Could not list ARCO stations: %s", exc)
-        return {"KLOT"}
-
-
-def _list_l2_stations_today() -> list[str]:
-    now = datetime.now(timezone.utc)
-    prefix = f"{_NEXRAD_L2_BUCKET}/{now.year}/{now.month:02d}/{now.day:02d}/"
-    try:
-        entries = _s3.ls(prefix, detail=False)
-        return sorted({e.rstrip("/").split("/")[-1] for e in entries})
-    except Exception as exc:
-        logger.warning("Could not list today's L2 stations: %s", exc)
-        return []
+        _ARCO_STATIONS = {"KLOT"}
+    return _ARCO_STATIONS
 
 
 # ── NEXRAD Level II: archive ──────────────────────────────────────────────────
 
-def list_nexrad_l2_files(
-    station: str, date: str
-) -> list[dict[str, Any]]:
+def list_nexrad_l2_files(station: str, date: str) -> list[dict[str, Any]]:
     """List Level II files for a station on a given date (YYYY-MM-DD)."""
     dt = datetime.strptime(date, "%Y-%m-%d")
-    prefix = f"{_NEXRAD_L2_BUCKET}/{dt.year}/{dt.month:02d}/{dt.day:02d}/{station.upper()}/"
+    prefix = f"{dt.year}/{dt.month:02d}/{dt.day:02d}/{station.upper()}/"
+
+    client = _s3()
+    paginator = client.get_paginator("list_objects_v2")
+
+    files = []
     try:
-        entries = _s3.ls(prefix, detail=True)
+        for page in paginator.paginate(Bucket=_NEXRAD_L2_BUCKET, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                name = obj["Key"].split("/")[-1]
+                if name.endswith("_MDM") or not name.startswith(station.upper()):
+                    continue
+                files.append({
+                    "name": name,
+                    "path": f"s3://{_NEXRAD_L2_BUCKET}/{obj['Key']}",
+                    "size": obj.get("Size", 0),
+                    "last_modified": str(obj.get("LastModified", "")),
+                })
     except Exception as exc:
         raise RuntimeError(f"Could not list files for {station} on {date}: {exc}") from exc
 
-    files = []
-    for e in entries:
-        name = e["name"].split("/")[-1]
-        # Skip MDM metadata files
-        if name.endswith("_MDM") or not name.startswith(station.upper()):
-            continue
-        files.append({
-            "name": name,
-            "path": f"s3://{e['name']}",
-            "size": e.get("size", 0),
-            "last_modified": str(e.get("LastModified", "")),
-        })
     return sorted(files, key=lambda f: f["name"])
 
 
-def open_nexrad_l2_path(s3_path: str) -> str:
-    """Return an fsspec-compatible URL for a Level II file (passed to xradar)."""
-    # xradar can open s3:// paths via fsspec with anon=True via storage_options
-    return s3_path
-
-
-# ── NEXRAD Level II: real-time (latest scan) ─────────────────────────────────
+# ── NEXRAD Level II: real-time ────────────────────────────────────────────────
 
 def get_latest_nexrad_l2(station: str) -> dict[str, Any]:
     """Return the most recent Level II file for a station (today or yesterday)."""
     now = datetime.now(timezone.utc)
     for delta_days in (0, 1):
-        from datetime import timedelta
         day = now - timedelta(days=delta_days)
         date_str = day.strftime("%Y-%m-%d")
         try:
@@ -105,36 +127,48 @@ def get_latest_nexrad_l2(station: str) -> dict[str, Any]:
     raise RuntimeError(f"No recent Level II files found for {station}")
 
 
-# ── NEXRAD ARCO (Zarr v3 / Icechunk) ─────────────────────────────────────────
+# ── NEXRAD ARCO (icechunk / Zarr v3) ─────────────────────────────────────────
 
-def list_arco_scans(station: str, limit: int = 50) -> list[dict[str, Any]]:
-    """List available volume scan times in the ARCO store for a station."""
+def _open_icechunk_session(station: str):
+    """Open a readonly icechunk session for a NEXRAD station."""
     try:
-        import zarr
-    except ImportError:
-        raise RuntimeError("zarr is required for ARCO access: pip install zarr icechunk")
-
-    store_url = f"s3://{_NEXRAD_ARCO_BUCKET}/{station.upper()}"
+        import icechunk
+    except ImportError as exc:
+        raise RuntimeError("icechunk is required: pip install icechunk") from exc
+    storage = icechunk.s3_storage(
+        bucket=_NEXRAD_ARCO_BUCKET,
+        prefix=station.upper(),
+        region="us-east-1",
+        anonymous=True,
+    )
     try:
-        store = zarr.storage.FsspecStore(store_url, fs=_s3)
-        root = zarr.open_group(store, mode="r")
-        scans = []
-        for key in sorted(root.keys()):
-            scans.append({"key": key, "path": f"{store_url}/{key}"})
-        return scans[-limit:]
+        repo = icechunk.Repository.open(storage)
     except Exception as exc:
         raise RuntimeError(f"Could not open ARCO store for {station}: {exc}") from exc
+    return repo.readonly_session("main")
 
 
-def open_arco_scan(station: str, scan_key: str) -> dict[str, Any]:
+def list_arco_scans(station: str, limit: int = 50) -> list[dict[str, Any]]:
+    """List available VCP types in the ARCO icechunk store for a station.
+
+    Each 'scan' corresponds to one Volume Coverage Pattern (VCP) type,
+    e.g. VCP-12, VCP-34. Each VCP contains all sweeps and all historical
+    scan times along the vcp_time dimension.
     """
-    Open a single ARCO scan as an xradar DataTree and return its schema.
-    Returns a dict with path info so the reader can open it.
-    """
-    store_url = f"s3://{_NEXRAD_ARCO_BUCKET}/{station.upper()}/{scan_key}"
-    return {
-        "type": "arco",
-        "path": store_url,
-        "station": station.upper(),
-        "scan_key": scan_key,
-    }
+    import zarr
+
+    session = _open_icechunk_session(station)
+    try:
+        root = zarr.open_group(session.store, mode="r")
+        vcps = sorted(
+            k for k in root.keys()
+            if not k.startswith(".") and isinstance(root[k], zarr.Group)
+        )
+    except Exception as exc:
+        raise RuntimeError(f"Could not list ARCO VCPs for {station}: {exc}") from exc
+
+    station_upper = station.upper()
+    return [
+        {"key": vcp, "path": f"icechunk://nexrad-arco/{station_upper}/{vcp}"}
+        for vcp in vcps
+    ]

@@ -360,11 +360,6 @@ fn main() {
             // Start the background monitor thread
             start_sidecar_monitor(monitor_handle);
 
-            // Auto-open devtools in debug builds
-            #[cfg(debug_assertions)]
-            if let Some(window) = app.get_webview_window("main") {
-                window.open_devtools();
-            }
 
             Ok(())
         })

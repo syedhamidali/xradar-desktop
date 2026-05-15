@@ -309,23 +309,29 @@ class RadarReader:
         s3_path:
             Full S3 URL, e.g. ``s3://noaa-nexrad-level2/2024/01/01/KLOT/KLOT20240101_000000_V06``
         """
-        import s3fs
-        import tempfile
+        import boto3
         import os
+        import tempfile
+        from botocore import UNSIGNED
+        from botocore.config import Config
 
-        fs = s3fs.S3FileSystem(anon=True)
         key = s3_path.removeprefix("s3://")
-        filename = key.split("/")[-1]
+        bucket, _, obj_key = key.partition("/")
+        filename = obj_key.split("/")[-1]
 
-        # Stream to a local temp file so xradar can open it normally
+        client = boto3.client(
+            "s3",
+            config=Config(signature_version=UNSIGNED),
+            region_name="us-east-1",
+        )
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}") as tmp:
             tmp_path = tmp.name
 
         try:
-            logger.info("Downloading %s -> %s", s3_path, tmp_path)
-            fs.get(key, tmp_path)
+            logger.info("Downloading s3://%s/%s -> %s", bucket, obj_key, tmp_path)
+            client.download_file(bucket, obj_key, tmp_path)
             result = self.open_file(tmp_path)
-            # Store the original S3 path for display
             result["source"] = s3_path
             result["source_type"] = "nexrad_l2_s3"
             return result
@@ -336,40 +342,108 @@ class RadarReader:
                 pass
 
     def open_arco_scan(self, station: str, scan_key: str) -> dict[str, Any]:
-        """Open a single scan from the NEXRAD ARCO Zarr store on S3.
+        """Open a VCP type from the NEXRAD ARCO icechunk store.
 
         Parameters
         ----------
         station:
             NEXRAD station ID, e.g. ``KLOT``
         scan_key:
-            Scan group key within the Zarr store, e.g. ``20240101T000000Z``
+            VCP type group key, e.g. ``VCP-12``
+
+        The icechunk store uses Rust-backed S3 I/O, so this is fully
+        synchronous — no asyncio conflicts with the websocket server loop.
         """
         try:
+            import icechunk
             import zarr
-            import s3fs
-            import xradar as xd
         except ImportError as exc:
-            raise RuntimeError(
-                "zarr and xradar are required for ARCO access: pip install zarr"
-            ) from exc
+            raise RuntimeError("icechunk and zarr required: pip install icechunk zarr") from exc
 
-        fs = s3fs.S3FileSystem(anon=True)
-        store_url = f"s3://nexrad-arco/{station.upper()}/{scan_key}"
-        logger.info("Opening ARCO scan %s", store_url)
+        import numpy as np
 
-        store = zarr.storage.FsspecStore(store_url, fs=fs)
-        dtree = xr.DataTree.from_dict(
-            {k: xr.open_zarr(zarr.storage.FsspecStore(f"{store_url}/{k}", fs=fs))
-             for k in zarr.open_group(store, mode="r").keys()}
+        station_upper = station.upper()
+        arco_bucket = "nexrad-arco"
+        store_url = f"icechunk://{arco_bucket}/{station_upper}/{scan_key}"
+        logger.info("Opening ARCO %s %s", station_upper, scan_key)
+
+        storage = icechunk.s3_storage(
+            bucket=arco_bucket,
+            prefix=station_upper,
+            region="us-east-1",
+            anonymous=True,
         )
+        session = icechunk.Repository.open(storage).readonly_session("main")
 
+        # List sweep sub-groups (filter out arrays like latitude, longitude, etc.)
+        root_zarr = zarr.open_group(session.store, mode="r")
+        vcp_zarr = root_zarr[scan_key]
+        sweep_names = sorted(
+            k for k in vcp_zarr.keys()
+            if k.startswith("sweep_") and isinstance(vcp_zarr[k], zarr.Group)
+        )
+        if not sweep_names:
+            raise RuntimeError(f"No sweep groups found in {scan_key}")
+
+        # Extract radar site coordinates from VCP-level arrays
+        lat: float | None = None
+        lon: float | None = None
+        alt: float | None = None
+        scan_time_str: str | None = None
+        for coord_key, target in (("latitude", "lat"), ("longitude", "lon"), ("altitude", "alt")):
+            if coord_key in vcp_zarr:
+                try:
+                    val = float(np.array(vcp_zarr[coord_key]).flat[0])
+                    if target == "lat":
+                        lat = val
+                    elif target == "lon":
+                        lon = val
+                    else:
+                        alt = val
+                except Exception:
+                    pass
+
+        # Open each sweep lazily, select the most recent vcp_time index
+        sweep_dict: dict[str, xr.Dataset] = {}
+        for sweep_name in sweep_names:
+            ds = xr.open_dataset(
+                session.store,
+                engine="zarr",
+                group=f"{scan_key}/{sweep_name}",
+                consolidated=False,
+            )
+            if "vcp_time" in ds.dims:
+                # Grab scan time before collapsing the dimension
+                if scan_time_str is None and "time" in ds.coords:
+                    try:
+                        t = ds["time"].values[-1]
+                        if hasattr(t, "__iter__"):
+                            t = t[0]
+                        scan_time_str = str(np.datetime64(t, "s"))
+                    except Exception:
+                        pass
+                ds = ds.isel(vcp_time=-1, drop=True)
+            sweep_dict[sweep_name] = ds
+
+        dtree = xr.DataTree.from_dict(sweep_dict)
         self._dtree = dtree
         self._path = store_url
         self._format = "nexrad_arco"
+
         result = self.get_schema()
+        # Inject site coordinates extracted from VCP arrays
+        if lat is not None:
+            result["attributes"]["latitude"] = lat
+        if lon is not None:
+            result["attributes"]["longitude"] = lon
+        if alt is not None:
+            result["attributes"]["altitude"] = alt
+        if scan_time_str:
+            result["attributes"]["scan_time"] = scan_time_str
         result["source"] = store_url
         result["source_type"] = "nexrad_arco"
+        result["vcp"] = scan_key
+        result["station"] = station_upper
         return result
 
     def get_schema(self) -> dict[str, Any]:
