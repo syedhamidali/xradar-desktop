@@ -19,6 +19,12 @@ if str(_server_dir) not in sys.path:
     sys.path.insert(0, str(_server_dir))
 
 import websockets
+from engine.cloud import (
+    get_latest_nexrad_l2,
+    list_arco_scans,
+    list_nexrad_l2_files,
+    list_nexrad_stations,
+)
 from engine.dualpol import histogram_data, region_stats, scatter_data
 from engine.exporter import RadarExporter
 from engine.processor import RadarProcessor, extract_cross_section, extract_vertical_profile
@@ -156,6 +162,12 @@ class ConnectionHandler:
             "get_data_table": self._handle_get_data_table,
             "get_metadata_tree": self._handle_get_metadata_tree,
             "ping": self._handle_ping,
+            "list_nexrad_stations": self._handle_list_nexrad_stations,
+            "list_nexrad_l2_files": self._handle_list_nexrad_l2_files,
+            "open_nexrad_l2": self._handle_open_nexrad_l2,
+            "open_nexrad_realtime": self._handle_open_nexrad_realtime,
+            "list_arco_scans": self._handle_list_arco_scans,
+            "open_arco_scan": self._handle_open_arco_scan,
             "get_scatter_data": self._handle_get_scatter_data,
             "get_histogram": self._handle_get_histogram,
             "get_region_stats": self._handle_get_region_stats,
@@ -481,6 +493,100 @@ class ConnectionHandler:
                 "file_open": has_file,
             }
         )
+
+    # ── Cloud / AWS handlers ──────────────────────────────────────────────────
+
+    async def _handle_list_nexrad_stations(self, msg: dict[str, Any]) -> None:
+        loop = asyncio.get_event_loop()
+        try:
+            stations = await loop.run_in_executor(None, list_nexrad_stations)
+            await self.send({"type": "nexrad_stations", "stations": stations})
+        except Exception as exc:
+            await self.send_error(f"list_nexrad_stations failed: {exc}")
+
+    async def _handle_list_nexrad_l2_files(self, msg: dict[str, Any]) -> None:
+        station = msg.get("station", "")
+        date = msg.get("date", "")
+        if not station or not date:
+            await self.send_error("list_nexrad_l2_files: 'station' and 'date' required")
+            return
+        loop = asyncio.get_event_loop()
+        try:
+            files = await loop.run_in_executor(None, list_nexrad_l2_files, station, date)
+            await self.send({"type": "nexrad_l2_files", "station": station, "date": date, "files": files})
+        except Exception as exc:
+            await self.send_error(f"list_nexrad_l2_files failed: {exc}")
+
+    async def _handle_open_nexrad_l2(self, msg: dict[str, Any]) -> None:
+        global _last_file_id
+        s3_path = msg.get("path", "")
+        if not s3_path:
+            await self.send_error("open_nexrad_l2: 'path' required")
+            return
+        await self.send_progress(5, f"Connecting to S3...")
+        loop = asyncio.get_event_loop()
+        try:
+            await self.send_progress(15, f"Downloading {s3_path.split('/')[-1]}...")
+            schema = await loop.run_in_executor(None, _shared_reader.open_s3_file, s3_path)
+            await self.send_progress(100, "Loaded")
+            file_id = str(uuid.uuid4())
+            _last_file_id = file_id
+            _store_datatree(_shared_reader._dtree, file_id)
+            schema_serial = {k: _serializable(v) for k, v in schema.items()}
+            await self.send({"type": "file_opened", "data": schema_serial, "file_id": file_id})
+        except Exception as exc:
+            await self.send_error(f"open_nexrad_l2 failed: {exc}")
+
+    async def _handle_open_nexrad_realtime(self, msg: dict[str, Any]) -> None:
+        global _last_file_id
+        station = msg.get("station", "")
+        if not station:
+            await self.send_error("open_nexrad_realtime: 'station' required")
+            return
+        await self.send_progress(5, f"Finding latest scan for {station}...")
+        loop = asyncio.get_event_loop()
+        try:
+            latest = await loop.run_in_executor(None, get_latest_nexrad_l2, station)
+            await self.send_progress(15, f"Downloading {latest['name']}...")
+            schema = await loop.run_in_executor(None, _shared_reader.open_s3_file, latest["path"])
+            await self.send_progress(100, "Loaded")
+            file_id = str(uuid.uuid4())
+            _last_file_id = file_id
+            _store_datatree(_shared_reader._dtree, file_id)
+            schema_serial = {k: _serializable(v) for k, v in schema.items()}
+            await self.send({"type": "file_opened", "data": schema_serial, "file_id": file_id})
+        except Exception as exc:
+            await self.send_error(f"open_nexrad_realtime failed: {exc}")
+
+    async def _handle_list_arco_scans(self, msg: dict[str, Any]) -> None:
+        station = msg.get("station", "KLOT")
+        limit = int(msg.get("limit", 50))
+        loop = asyncio.get_event_loop()
+        try:
+            scans = await loop.run_in_executor(None, list_arco_scans, station, limit)
+            await self.send({"type": "arco_scans", "station": station, "scans": scans})
+        except Exception as exc:
+            await self.send_error(f"list_arco_scans failed: {exc}")
+
+    async def _handle_open_arco_scan(self, msg: dict[str, Any]) -> None:
+        global _last_file_id
+        station = msg.get("station", "")
+        scan_key = msg.get("scan_key", "")
+        if not station or not scan_key:
+            await self.send_error("open_arco_scan: 'station' and 'scan_key' required")
+            return
+        await self.send_progress(5, f"Opening ARCO scan {scan_key}...")
+        loop = asyncio.get_event_loop()
+        try:
+            schema = await loop.run_in_executor(None, _shared_reader.open_arco_scan, station, scan_key)
+            await self.send_progress(100, "Loaded")
+            file_id = str(uuid.uuid4())
+            _last_file_id = file_id
+            _store_datatree(_shared_reader._dtree, file_id)
+            schema_serial = {k: _serializable(v) for k, v in schema.items()}
+            await self.send({"type": "file_opened", "data": schema_serial, "file_id": file_id})
+        except Exception as exc:
+            await self.send_error(f"open_arco_scan failed: {exc}")
 
     async def _handle_open_file(self, msg: dict[str, Any]) -> None:
         global _last_file_id

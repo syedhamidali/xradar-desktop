@@ -301,6 +301,77 @@ class RadarReader:
 
         raise ValueError(f"Could not open {path} with any supported format. Last error: {last_exc}")
 
+    def open_s3_file(self, s3_path: str) -> dict[str, Any]:
+        """Open a NEXRAD Level II file directly from S3 (anonymous access).
+
+        Parameters
+        ----------
+        s3_path:
+            Full S3 URL, e.g. ``s3://noaa-nexrad-level2/2024/01/01/KLOT/KLOT20240101_000000_V06``
+        """
+        import s3fs
+        import tempfile
+        import os
+
+        fs = s3fs.S3FileSystem(anon=True)
+        key = s3_path.removeprefix("s3://")
+        filename = key.split("/")[-1]
+
+        # Stream to a local temp file so xradar can open it normally
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}") as tmp:
+            tmp_path = tmp.name
+
+        try:
+            logger.info("Downloading %s -> %s", s3_path, tmp_path)
+            fs.get(key, tmp_path)
+            result = self.open_file(tmp_path)
+            # Store the original S3 path for display
+            result["source"] = s3_path
+            result["source_type"] = "nexrad_l2_s3"
+            return result
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+    def open_arco_scan(self, station: str, scan_key: str) -> dict[str, Any]:
+        """Open a single scan from the NEXRAD ARCO Zarr store on S3.
+
+        Parameters
+        ----------
+        station:
+            NEXRAD station ID, e.g. ``KLOT``
+        scan_key:
+            Scan group key within the Zarr store, e.g. ``20240101T000000Z``
+        """
+        try:
+            import zarr
+            import s3fs
+            import xradar as xd
+        except ImportError as exc:
+            raise RuntimeError(
+                "zarr and xradar are required for ARCO access: pip install zarr"
+            ) from exc
+
+        fs = s3fs.S3FileSystem(anon=True)
+        store_url = f"s3://nexrad-arco/{station.upper()}/{scan_key}"
+        logger.info("Opening ARCO scan %s", store_url)
+
+        store = zarr.storage.FsspecStore(store_url, fs=fs)
+        dtree = xr.DataTree.from_dict(
+            {k: xr.open_zarr(zarr.storage.FsspecStore(f"{store_url}/{k}", fs=fs))
+             for k in zarr.open_group(store, mode="r").keys()}
+        )
+
+        self._dtree = dtree
+        self._path = store_url
+        self._format = "nexrad_arco"
+        result = self.get_schema()
+        result["source"] = store_url
+        result["source_type"] = "nexrad_arco"
+        return result
+
     def get_schema(self) -> dict[str, Any]:
         """Extract metadata from the currently-open datatree.
 

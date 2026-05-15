@@ -8,8 +8,10 @@
   import TimeSeriesChart from './TimeSeriesChart.svelte';
   import CrossSectionPanel from './CrossSectionPanel.svelte';
   import VolumePanel from './VolumePanel.svelte';
+  import CloudDataPanel from './CloudDataPanel.svelte';
 
   const PANEL_MAP: Record<string, { component: any; label: string; icon: string }> = {
+    cloud: { component: CloudDataPanel, label: 'Cloud Data', icon: '☁' },
     volume: { component: VolumePanel, label: '3D Volume', icon: '\u{1F4E6}' },
     timeseries: { component: TimeSeriesChart, label: 'Time Series', icon: '\u{1F4C8}' },
     crosssection: { component: CrossSectionPanel, label: 'Cross-Section', icon: '///' },
