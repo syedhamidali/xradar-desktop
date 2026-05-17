@@ -1,77 +1,76 @@
 <script lang="ts">
-  /**
-   * BoxSelectTool — SVG overlay on the PPI view that lets users draw
-   * a rectangular selection box for 3D volume rendering.
-   *
-   * Dispatches 'box-selected' with {xMin, xMax, yMin, yMax} in meters
-   * from radar center.
-   */
-  import { createEventDispatcher } from 'svelte';
+  let {
+    active = false,
+    radarRange = 150000,   // meters
+    canvasWidth = 800,
+    canvasHeight = 800,
+    scale = 1,
+    translateX = 0,        // meters (same units as ppiRenderer)
+    translateY = 0,        // meters
+    onboxselected,
+  }: {
+    active?: boolean;
+    radarRange?: number;
+    canvasWidth?: number;
+    canvasHeight?: number;
+    scale?: number;
+    translateX?: number;
+    translateY?: number;
+    onboxselected?: (box: { xMin: number; xMax: number; yMin: number; yMax: number }) => void;
+  } = $props();
 
-  export let active: boolean = false;
-  export let radarRange: number = 150000; // max range in meters
-  export let canvasWidth: number = 800;
-  export let canvasHeight: number = 800;
+  let dragging = $state(false);
+  let startX   = $state(0);
+  let startY   = $state(0);
+  let currX    = $state(0);
+  let currY    = $state(0);
 
-  const dispatch = createEventDispatcher<{
-    'box-selected': { xMin: number; xMax: number; yMin: number; yMax: number };
-  }>();
+  const rectX = $derived(Math.min(startX, currX));
+  const rectY = $derived(Math.min(startY, currY));
+  const rectW = $derived(Math.abs(currX - startX));
+  const rectH = $derived(Math.abs(currY - startY));
 
-  let dragging = false;
-  let startX = 0;
-  let startY = 0;
-  let currentX = 0;
-  let currentY = 0;
-
-  // Convert pixel coords to meters from radar center.
-  // PPI maps [-radarRange, +radarRange] to [0, canvasWidth] on x
-  // and [canvasHeight, 0] on y (north up).
-  function pixToMetersX(px: number): number {
-    return ((px / canvasWidth) * 2 - 1) * radarRange;
+  // Inverse of ppiRenderer's NDC→world transform; matches screenToData() in RadarViewer.
+  function pixToMeters(px: number, py: number): [number, number] {
+    const ndcX   = (px / canvasWidth)  * 2 - 1;
+    const ndcY   = 1 - (py / canvasHeight) * 2;
+    const aspect = canvasWidth / canvasHeight;
+    const sx = (aspect >= 1 ? scale / aspect : scale) / radarRange;
+    const sy = (aspect >= 1 ? scale : scale * aspect)  / radarRange;
+    return [
+      (ndcX - translateX * sx) / sx,
+      (ndcY - translateY * sy) / sy,
+    ];
   }
 
-  function pixToMetersY(py: number): number {
-    return (1 - (py / canvasHeight) * 2) * radarRange;
-  }
-
-  // Derived rectangle in pixel space
-  $: rectX = Math.min(startX, currentX);
-  $: rectY = Math.min(startY, currentY);
-  $: rectW = Math.abs(currentX - startX);
-  $: rectH = Math.abs(currentY - startY);
-
-  function onMouseDown(e: MouseEvent) {
+  function onmousedown(e: MouseEvent) {
     if (!active) return;
     dragging = true;
     const svg = e.currentTarget as SVGSVGElement;
     const rect = svg.getBoundingClientRect();
     startX = e.clientX - rect.left;
     startY = e.clientY - rect.top;
-    currentX = startX;
-    currentY = startY;
+    currX = startX;
+    currY = startY;
   }
 
-  function onMouseMove(e: MouseEvent) {
+  function onmousemove(e: MouseEvent) {
     if (!dragging) return;
     const svg = (e.currentTarget ?? e.target) as SVGSVGElement;
     const rect = svg.getBoundingClientRect();
-    currentX = Math.max(0, Math.min(canvasWidth, e.clientX - rect.left));
-    currentY = Math.max(0, Math.min(canvasHeight, e.clientY - rect.top));
+    currX = Math.max(0, Math.min(canvasWidth,  e.clientX - rect.left));
+    currY = Math.max(0, Math.min(canvasHeight, e.clientY - rect.top));
   }
 
-  function onMouseUp() {
+  function onmouseup() {
     if (!dragging) return;
     dragging = false;
-
-    // Require a minimum selection size (at least 5px)
     if (rectW < 5 || rectH < 5) return;
 
-    const xMin = pixToMetersX(Math.min(startX, currentX));
-    const xMax = pixToMetersX(Math.max(startX, currentX));
-    const yMin = pixToMetersY(Math.max(startY, currentY)); // max pixel Y = min meters Y
-    const yMax = pixToMetersY(Math.min(startY, currentY));
-
-    dispatch('box-selected', { xMin, xMax, yMin, yMax });
+    // top pixel Y = northernmost (largest ym), bottom pixel Y = southernmost
+    const [xMin, yMax] = pixToMeters(Math.min(startX, currX), Math.min(startY, currY));
+    const [xMax, yMin] = pixToMeters(Math.max(startX, currX), Math.max(startY, currY));
+    onboxselected?.({ xMin, xMax, yMin, yMax });
   }
 </script>
 
@@ -81,23 +80,16 @@
     class="box-select-overlay"
     width={canvasWidth}
     height={canvasHeight}
-    on:mousedown={onMouseDown}
-    on:mousemove={onMouseMove}
-    on:mouseup={onMouseUp}
-    on:mouseleave={onMouseUp}
+    {onmousedown}
+    {onmousemove}
+    {onmouseup}
+    onmouseleave={onmouseup}
   >
     {#if dragging && rectW > 0 && rectH > 0}
-      <rect
-        x={rectX}
-        y={rectY}
-        width={rectW}
-        height={rectH}
-        class="selection-rect"
-      />
-      <!-- Corner handles -->
-      <circle cx={rectX} cy={rectY} r="3" class="corner-handle" />
-      <circle cx={rectX + rectW} cy={rectY} r="3" class="corner-handle" />
-      <circle cx={rectX} cy={rectY + rectH} r="3" class="corner-handle" />
+      <rect x={rectX} y={rectY} width={rectW} height={rectH} class="selection-rect" />
+      <circle cx={rectX}        cy={rectY}        r="3" class="corner-handle" />
+      <circle cx={rectX + rectW} cy={rectY}        r="3" class="corner-handle" />
+      <circle cx={rectX}        cy={rectY + rectH} r="3" class="corner-handle" />
       <circle cx={rectX + rectW} cy={rectY + rectH} r="3" class="corner-handle" />
     {/if}
   </svg>

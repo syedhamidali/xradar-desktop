@@ -718,7 +718,9 @@ export class VolumeRenderer {
     const eyeZ = this.camTarget[2] + this.camRadius * Math.sin(this.camPhi) * Math.sin(this.camTheta);
     const eye: [number, number, number] = [eyeX, eyeY, eyeZ];
 
-    const view = mat4LookAt(eye, this.camTarget, [0, 1, 0]);
+    // Flip up vector when camera is below the orbit equator to prevent gimbal lock
+    const up: [number, number, number] = [0, this.camPhi < Math.PI / 2 ? 1 : -1, 0];
+    const view = mat4LookAt(eye, this.camTarget, up);
     const mvp = mat4Multiply(proj, view);
 
     // Camera position in volume space [0,1]^3 (already in that space since cube is [0,1]^3)
@@ -785,9 +787,10 @@ export class VolumeRenderer {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-    // Render back faces of the cube (camera is typically outside, sees inner faces)
+    // Cull back faces — renders front faces (the ones facing the camera) from any angle.
+    // The fragment shader's intersectBox handles ray entry/exit regardless of which face runs.
     gl.enable(gl.CULL_FACE);
-    gl.cullFace(gl.FRONT);
+    gl.cullFace(gl.BACK);
 
     // Disable depth writing (volume compositing handles ordering)
     gl.depthMask(false);
@@ -896,8 +899,8 @@ export class VolumeRenderer {
       this.camTheta -= dx * rotateSpeed;
       this.camPhi -= dy * rotateSpeed;
 
-      // Clamp phi to avoid gimbal lock at poles
-      this.camPhi = Math.max(0.05, Math.min(Math.PI - 0.05, this.camPhi));
+      // Clamp phi — leave a small margin at each pole to avoid degenerate up vector
+      this.camPhi = Math.max(0.01, Math.min(Math.PI - 0.01, this.camPhi));
     }
 
     this.markDirty();

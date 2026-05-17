@@ -512,6 +512,22 @@
             <path d="M9 14l2-2" stroke-dasharray="2 2"/>
           </svg>
         </button>
+        <button class="measure-toggle" class:active={$boxSelectActive}
+                on:click={() => boxSelectActive.update(v => !v)}
+                title="Draw box to clip 3D volume region">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="1" stroke-dasharray="4 2"/>
+            <path d="M12 8v8M8 12h8" stroke-width="1.5"/>
+          </svg>
+        </button>
+        {#if $selectedBox}
+          <button class="measure-toggle" on:click={() => selectedBox.set(null)} title="Clear 3D clip region">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="1" stroke-dasharray="4 2"/>
+              <path d="M9 9l6 6M15 9l-6 6" stroke-width="1.5"/>
+            </svg>
+          </button>
+        {/if}
         <div class="zoom-badge">{zoomLabel}</div>
       {/if}
     </div>
@@ -601,8 +617,32 @@
           radarRange={currentMaxRange}
           canvasWidth={containerWidth}
           canvasHeight={containerHeight}
-          on:box-selected={(e) => selectedBox.set(e.detail)}
+          {scale}
+          {translateX}
+          {translateY}
+          onboxselected={(box) => selectedBox.set(box)}
         />
+        {#if $selectedBox && !$boxSelectActive}
+          {@const clip = $selectedBox}
+          {@const mr = currentMaxRange}
+          {@const aspect = containerWidth / containerHeight}
+          {@const sx = (aspect >= 1 ? scale / aspect : scale) / mr}
+          {@const sy = (aspect >= 1 ? scale : scale * aspect) / mr}
+          {@const x1 = ((clip.xMin + translateX) * sx + 1) / 2 * containerWidth}
+          {@const x2 = ((clip.xMax + translateX) * sx + 1) / 2 * containerWidth}
+          {@const y1 = (1 - (clip.yMax + translateY) * sy) / 2 * containerHeight}
+          {@const y2 = (1 - (clip.yMin + translateY) * sy) / 2 * containerHeight}
+          <svg class="clip-box-svg" width={containerWidth} height={containerHeight} style="pointer-events:none">
+            <rect
+              x={Math.min(x1, x2)} y={Math.min(y1, y2)}
+              width={Math.abs(x2 - x1)} height={Math.abs(y2 - y1)}
+              fill="rgba(0,220,255,0.05)"
+              stroke="rgba(0,220,255,0.6)"
+              stroke-width="1.5"
+              stroke-dasharray="5 3"
+            />
+          </svg>
+        {/if}
       {/if}
 
       {#if isLoading}
@@ -758,6 +798,13 @@
 
   .viewer-canvas.dragging { cursor: grabbing; }
   .viewer-canvas.measure-active { cursor: crosshair; }
+
+  .clip-box-svg {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 18;
+  }
 
   .measure-toggle {
     display: flex;

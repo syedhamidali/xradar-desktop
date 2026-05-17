@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import gzip
 import logging
 import math
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +48,29 @@ def _get_opener(format_name: str):
     if opener is None:
         raise ImportError(f"xradar.io.{func_name} not available in installed xradar version")
     return opener
+
+
+def _decompress_if_needed(path: str) -> tuple[str, bool]:
+    """If *path* is gzip-compressed, decompress to a temp file and return (tmp_path, True).
+    Otherwise return (path, False). Caller is responsible for unlinking the temp file."""
+    try:
+        with open(path, "rb") as f:
+            magic = f.read(2)
+    except OSError:
+        return path, False
+    if magic != b"\x1f\x8b":
+        return path, False
+    try:
+        suffix = Path(path).stem  # strip .gz → use inner name as suffix hint
+        fd, tmp_path = tempfile.mkstemp(suffix=f"_{suffix}")
+        os.close(fd)
+        with gzip.open(path, "rb") as gz, open(tmp_path, "wb") as out:
+            out.write(gz.read())
+        logger.info("Decompressed %s → %s", path, tmp_path)
+        return tmp_path, True
+    except Exception as exc:
+        logger.warning("Failed to decompress %s: %s", path, exc)
+        return path, False
 
 
 def _sniff_magic(path: str) -> str | None:
@@ -271,41 +297,51 @@ class RadarReader:
         if not p.exists():
             raise FileNotFoundError(f"File not found: {path}")
 
-        formats_to_try = _guess_formats_by_extension(path)
+        # Transparently decompress gzip files — xradar can't handle the gzip wrapper directly.
+        open_path, is_tmp = _decompress_if_needed(path)
+
+        formats_to_try = _guess_formats_by_extension(open_path)
         last_exc: Exception | None = None
 
-        for fmt in formats_to_try:
+        try:
+            for fmt in formats_to_try:
+                try:
+                    opener = _get_opener(fmt)
+                    logger.info("Trying format '%s' for %s", fmt, open_path)
+                    dtree = opener(open_path)
+                    self._dtree = dtree
+                    self._path = path  # keep original path for display
+                    self._format = fmt
+                    logger.info("Opened %s as %s", path, fmt)
+                    return self.get_schema()
+                except (ValueError, TypeError, KeyError, OSError, ImportError) as exc:
+                    logger.debug("Format '%s' failed for %s: %s", fmt, open_path, exc)
+                    last_exc = exc
+                    continue
+                except Exception as exc:
+                    logger.debug("Format '%s' failed unexpectedly for %s: %s", fmt, open_path, exc)
+                    last_exc = exc
+                    continue
+
+            # Last resort: try generic NetCDF (IMD/IRIS-origin single-sweep files, etc.)
             try:
-                opener = _get_opener(fmt)
-                logger.info("Trying format '%s' for %s", fmt, path)
-                dtree = opener(path)
+                logger.info("Trying generic NetCDF fallback for %s", open_path)
+                dtree = _open_generic_netcdf(open_path)
                 self._dtree = dtree
                 self._path = path
-                self._format = fmt
-                logger.info("Opened %s as %s", path, fmt)
+                self._format = "generic_netcdf"
+                logger.info("Opened %s as generic NetCDF", path)
                 return self.get_schema()
-            except (ValueError, TypeError, KeyError, OSError, ImportError) as exc:
-                logger.debug("Format '%s' failed for %s: %s", fmt, path, exc)
-                last_exc = exc
-                continue
             except Exception as exc:
-                logger.debug("Format '%s' failed unexpectedly for %s: %s", fmt, path, exc)
-                last_exc = exc
-                continue
+                logger.debug("Generic NetCDF fallback failed: %s", exc)
 
-        # Last resort: try generic NetCDF (IMD/IRIS-origin single-sweep files, etc.)
-        try:
-            logger.info("Trying generic NetCDF fallback for %s", path)
-            dtree = _open_generic_netcdf(path)
-            self._dtree = dtree
-            self._path = path
-            self._format = "generic_netcdf"
-            logger.info("Opened %s as generic NetCDF", path)
-            return self.get_schema()
-        except Exception as exc:
-            logger.debug("Generic NetCDF fallback failed: %s", exc)
-
-        raise ValueError(f"Could not open {path} with any supported format. Last error: {last_exc}")
+            raise ValueError(f"Could not open {path} with any supported format. Last error: {last_exc}")
+        finally:
+            if is_tmp:
+                try:
+                    os.unlink(open_path)
+                except OSError:
+                    pass
 
     def open_s3_file(self, s3_path: str) -> dict[str, Any]:
         """Open a NEXRAD Level II file directly from S3 (anonymous access).
@@ -418,9 +454,16 @@ class RadarReader:
             # Variable names come from zarr array metadata (in-memory, no S3 round-trip)
             vars_in: list[str] = []
             try:
-                for k in sweep_zarr.keys():
-                    m = sweep_zarr[k]
-                    if isinstance(m, zarr.Array) and m.ndim >= 2 and np.dtype(m.dtype).kind == "f":
+                # Use .arrays() (zarr v3 / icechunk) if available; fall back to
+                # duck-typed key iteration so isinstance(zarr.Array) version mismatch
+                # doesn't silently produce an empty list.
+                arr_iter = (
+                    sweep_zarr.arrays()
+                    if hasattr(sweep_zarr, "arrays")
+                    else ((k, sweep_zarr[k]) for k in sweep_zarr.keys())
+                )
+                for k, m in arr_iter:
+                    if hasattr(m, "ndim") and hasattr(m, "dtype") and m.ndim >= 2 and np.dtype(m.dtype).kind == "f":
                         vars_in.append(k)
             except Exception:
                 pass
@@ -554,9 +597,8 @@ class RadarReader:
             except Exception:
                 pass
             entry: dict[str, Any] = {"index": idx, "elevation": elevation}
-            if sweep_vars is not None:
+            if sweep_vars:
                 entry["variables"] = sweep_vars
-                # Union into the top-level variable list
                 variables.update(sweep_vars)
             sweeps.append(entry)
 

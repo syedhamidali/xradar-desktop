@@ -325,7 +325,7 @@
       width={SVG_WIDTH}
       height={SVG_HEIGHT}
       viewBox="0 0 {SVG_WIDTH} {SVG_HEIGHT}"
-      on:click={onSvgClick}
+      onclick={onSvgClick}
     >
       <!-- Grid lines -->
       {#each [0.25, 0.5, 0.75] as frac}
@@ -356,7 +356,7 @@
           r="5"
           class="tfe-control-point"
           class:dragging={dragIndex === i}
-          on:mousedown={(e) => onPointDown(e, i)}
+          onmousedown={(e) => onPointDown(e, i)}
         />
       {/each}
     </svg>
@@ -370,10 +370,10 @@
   <div class="tfe-presets">
     <span class="tfe-presets-label">Presets</span>
     <div class="tfe-preset-btns">
-      <button class="tfe-preset" on:click={applyPresetReflectivity}>Reflectivity</button>
-      <button class="tfe-preset" on:click={applyPresetVelocity}>Velocity</button>
-      <button class="tfe-preset" on:click={applyPresetFullOpacity}>Full Opacity</button>
-      <button class="tfe-preset" on:click={applyPresetTransparentCore}>Transparent Core</button>
+      <button class="tfe-preset" onclick={applyPresetReflectivity}>Reflectivity</button>
+      <button class="tfe-preset" onclick={applyPresetVelocity}>Velocity</button>
+      <button class="tfe-preset" onclick={applyPresetFullOpacity}>Full Opacity</button>
+      <button class="tfe-preset" onclick={applyPresetTransparentCore}>Transparent Core</button>
     </div>
   </div>
 </div>
