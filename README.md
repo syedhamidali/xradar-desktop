@@ -2,6 +2,10 @@
 
 A lightweight, cross-platform desktop application for radar data visualization and analysis, built on [xradar](https://github.com/openradar/xradar), [xarray](https://xarray.dev/), and [Dask](https://www.dask.org/).
 
+| 2D PPI View | 3D Volume Renderer |
+|:-----------:|:------------------:|
+| ![2D PPI view showing NEXRAD reflectivity with map overlay](docs/screenshot_2d.png) | ![3D volume renderer with box-clip selection](docs/screenshot_3d.png) |
+
 ## Features
 
 - **Multi-format support** — NEXRAD Level II, ODIM H5, CfRadial, IRIS/Sigmet, Rainbow, Furuno, IMD (gzip-wrapped files handled automatically)
