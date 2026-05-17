@@ -4,15 +4,17 @@ A lightweight, cross-platform desktop application for radar data visualization a
 
 ## Features
 
-- **Multi-format support** -- NEXRAD Level II, ODIM H5, CfRadial, IRIS/Sigmet, Rainbow, Furuno, IMD
-- **GPU-accelerated rendering** -- deck.gl + Mapbox GL for 60fps pan/zoom with radar overlays
-- **Lazy, out-of-core processing** -- Dask-backed xarray for large datasets without memory limits
-- **Publication-quality export** -- High-DPI raster (Datashader) + vector overlays (Cairo) to PNG/SVG/PDF
-- **Dual-pol products** -- ZDR, KDP, HID, and custom dual-polarization dashboards
-- **Cross-sections & profiles** -- RHI slices, vertical profiles, and time-series analysis
-- **QC pipelines** -- Despeckle, velocity dealiasing, and custom filtering
-- **Cloud access** -- Open files from S3, THREDDS, or OPeNDAP via fsspec
-- **Small footprint** -- ~15MB installer (Tauri, not Electron)
+- **Multi-format support** — NEXRAD Level II, ODIM H5, CfRadial, IRIS/Sigmet, Rainbow, Furuno, IMD (gzip-wrapped files handled automatically)
+- **2D PPI viewer** — GPU-accelerated pan/zoom with map background, geo overlays, range rings, and colorbar
+- **3D volume renderer** — WebGL2 polar ray-marching shader; orbit, zoom, and pan around the full radar volume; transfer function editor for opacity/color mapping
+- **2D→3D box-clip** — Draw a selection box in the 2D view to isolate a region; the 3D view clips to that column and re-centers the camera automatically
+- **Lazy, out-of-core processing** — Dask-backed xarray; large datasets load without memory limits
+- **Publication-quality export** — High-DPI raster (Datashader) + vector overlays (Cairo) to PNG/SVG/PDF
+- **Dual-pol products** — ZDR, KDP, HID, and custom dual-polarization dashboards
+- **Cross-sections & profiles** — RHI slices, vertical profiles, and time-series analysis
+- **QC pipelines** — Despeckle, velocity dealiasing, and custom filtering
+- **Cloud access** — Open NEXRAD Level II directly from `s3://noaa-nexrad-level2` or ARCO data via boto3/icechunk
+- **Small footprint** — ~15 MB installer (Tauri 2, not Electron)
 
 ## Tech Stack
 
@@ -20,63 +22,92 @@ A lightweight, cross-platform desktop application for radar data visualization a
 |---|---|
 | Desktop shell | Tauri 2.0 (Rust) |
 | Frontend | Svelte 5 |
-| Map / Radar view | deck.gl + Mapbox GL |
+| 2D radar view | WebGL2 (custom PPI renderer) |
+| 3D volume view | WebGL2 polar ray-marching shader |
+| Map overlays | Mapbox GL / deck.gl |
 | Data transfer | WebSocket + Apache Arrow IPC |
 | Data engine | xradar + xarray + Dask |
 | Rendering | Datashader + Cairo + Pillow |
+| Cloud data | boto3 + icechunk + s3fs + fsspec |
 
 ## Prerequisites
 
-- [Node.js](https://nodejs.org/) >= 20
-- [Rust](https://www.rust-lang.org/tools/install) (stable)
-- Python >= 3.10
-- System dependencies:
-  - **macOS**: Xcode Command Line Tools, `brew install cairo pkg-config`
-  - **Linux**: `sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev libcairo2-dev pkg-config`
-  - **Windows**: WebView2 (usually pre-installed on Windows 10+)
+| Tool | Version | Install |
+|---|---|---|
+| Node.js | >= 20 | [nodejs.org](https://nodejs.org/) |
+| Rust (stable) | latest | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
+| Tauri CLI | ^2 | `cargo install tauri-cli@^2` |
+| Python | >= 3.10 | [python.org](https://www.python.org/) |
 
-## Getting Started
+### System libraries
+
+**macOS**
+```bash
+xcode-select --install
+brew install cairo pkg-config
+```
+
+**Ubuntu / Debian**
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+                 patchelf libgtk-3-dev libcairo2-dev pkg-config
+```
+
+**Windows**
+WebView2 is pre-installed on Windows 10+. No extra steps required.
+
+## Installation
 
 ```bash
-# Clone the repo
+# 1. Clone
 git clone https://github.com/syedhamidali/xradar-desktop.git
 cd xradar-desktop
 
-# Install frontend dependencies
+# 2. Frontend dependencies
 npm install
 
-# Set up Python virtual environment and install sidecar dependencies
+# 3. Python sidecar — create a virtual environment and install
 cd python
 python3 -m venv .venv
-source .venv/bin/activate      # Linux/macOS
-# .venv\Scripts\activate       # Windows
+source .venv/bin/activate        # macOS / Linux
+# .venv\Scripts\activate         # Windows
+
 pip install -e ".[dev]"
 cd ..
 
-# Run in development mode
+# 4. Launch in development mode
 npm run tauri dev
 ```
 
-> **Note:** A virtual environment is required on modern Linux distributions
-> (Ubuntu 23.04+, Debian 12+, Fedora 38+) due to [PEP 668](https://peps.python.org/pep-0668/).
-> The Tauri app automatically detects and uses `python/.venv` if it exists.
+> **Note:** A virtual environment is required on Ubuntu 23.04+, Debian 12+, and Fedora 38+
+> due to [PEP 668](https://peps.python.org/pep-0668/).
+> The app auto-detects and uses `python/.venv` when present.
+
+## Build
+
+```bash
+# Production installer (creates platform-native .dmg / .deb / .msi)
+npm run tauri build
+```
+
+Installers are written to `src-tauri/target/release/bundle/`.
 
 ## Project Structure
 
 ```
 xradar-desktop/
-├── src/                    # Svelte frontend
+├── src/                        # Svelte frontend
 │   ├── App.svelte
 │   └── lib/
-│       ├── components/     # UI components (RadarViewer, DataInspector, etc.)
-│       ├── stores/         # Reactive state management
-│       ├── utils/          # WebSocket client, Arrow IPC, colormaps
-│       └── workers/        # Web workers for binary processing
-├── src-tauri/              # Rust / Tauri shell
+│       ├── components/         # RadarViewer (2D), RadarViewer3D, DataInspector, ...
+│       ├── stores/             # Reactive state (radarData, volumeSelect, ...)
+│       ├── utils/              # WebSocket client, Arrow IPC, PPI renderer, colormaps
+│       └── workers/            # Web workers for binary processing
+├── src-tauri/                  # Rust / Tauri shell
 │   └── src/main.rs
-├── python/                 # Python sidecar
-│   ├── server.py           # WebSocket server
-│   ├── engine/             # xradar processing engine
+├── python/                     # Python sidecar (WebSocket engine)
+│   ├── server.py               # WebSocket entry point
+│   ├── engine/                 # reader, renderer, cloud, arrow_bridge
 │   └── tests/
 ├── package.json
 └── vite.config.ts
@@ -86,9 +117,9 @@ xradar-desktop/
 
 ```bash
 # Activate the Python venv first
-source python/.venv/bin/activate
+source python/.venv/bin/activate   # macOS / Linux
 
-# Lint Python
+# Lint & format Python
 ruff check --config ruff.toml python/
 ruff format --config ruff.toml python/
 
@@ -99,9 +130,17 @@ npx tsc --noEmit
 # Run Python tests
 cd python && python -m pytest tests/ -v
 
-# Build for production
-npm run tauri build
+# Build frontend only (no Tauri)
+npm run build
 ```
+
+## Using the 3D View
+
+1. Open a radar file and select a variable — sweeps start loading automatically.
+2. Switch to the **3D** tab; the volume renders as each sweep arrives (lowest elevation first).
+3. **Orbit**: drag. **Zoom**: scroll or `+`/`-`. **Pan**: Shift+drag. **Reset**: `R`.
+4. Adjust **Step** (ray-march resolution) and **Opacity** from the toolbar, or open the **TF** editor to tune the transfer function.
+5. To focus on a storm cell, switch back to 2D, click the **box-select** button (dashed rectangle icon), draw a box around the region, then switch to 3D — the view clips and re-centers on that column.
 
 ## License
 

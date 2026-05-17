@@ -63,6 +63,10 @@
   let camDist  = $state(800);   // km from target
   let camTgt: [number,number,number] = [0,0,0];
 
+  // Animation targets — renderFrame lerps toward these each frame
+  let camTgtTarget: [number,number,number] = [0, 0, 0];
+  let camDistTarget = 800;
+
   let isDragging  = false;
   let isShiftDrag = false;
   let lastMouse   = [0, 0];
@@ -199,7 +203,8 @@
       vec2 tHit = raySphere(u_camPos, rayDir, u_maxRange);
       if (tHit.x > tHit.y) { fragColor = vec4(0.07, 0.07, 0.10, 1.0); return; }
 
-      float tStart = max(tHit.x, 0.0);
+      float tOrig  = max(tHit.x, 0.0);
+      float tStart = tOrig;
       float tEnd   = tHit.y;
 
       // Interleaved gradient noise — better spatial distribution than sin hash
@@ -282,6 +287,51 @@
               float rb = 0.5 * (1.0 - fc.a);
               fc.rgb   = mix(fc.rgb, vec3(0.28, 0.28, 0.45), rb);
               fc.a     = min(1.0, fc.a + rb * 0.35);
+            }
+          }
+        }
+      }
+
+      // Clip box wireframe — ground footprint edges + 4 vertical corner lines
+      if (u_useClip != 0) {
+        float ew = max(0.25, 0.004 * length(u_camPos));
+
+        // Ground footprint: 4 edges of the XY rectangle
+        if (u_camPos.z > 0.0 && rayDir.z < -0.0001) {
+          float tG = -u_camPos.z / rayDir.z;
+          if (tG >= 0.0 && tG <= tEnd) {
+            vec3 gp = u_camPos + rayDir * tG;
+            bool inX = gp.x >= u_clipMinX && gp.x <= u_clipMaxX;
+            bool inY = gp.y >= u_clipMinY && gp.y <= u_clipMaxY;
+            float ex = min(abs(gp.x - u_clipMinX), abs(gp.x - u_clipMaxX));
+            float ey = min(abs(gp.y - u_clipMinY), abs(gp.y - u_clipMaxY));
+            if ((inY && ex < ew) || (inX && ey < ew)) {
+              float cb = 0.7 * (1.0 - fc.a);
+              fc.rgb = mix(fc.rgb, vec3(0.0, 0.85, 1.0), cb);
+              fc.a   = min(1.0, fc.a + cb * 0.45);
+            }
+          }
+        }
+
+        // Vertical corner lines: closest point on ray to each corner (in XY)
+        float d2r = dot(rayDir.xy, rayDir.xy);
+        if (d2r > 1e-6) {
+          vec2 corners[4];
+          corners[0] = vec2(u_clipMinX, u_clipMinY);
+          corners[1] = vec2(u_clipMaxX, u_clipMinY);
+          corners[2] = vec2(u_clipMaxX, u_clipMaxY);
+          corners[3] = vec2(u_clipMinX, u_clipMaxY);
+          for (int i = 0; i < 4; i++) {
+            float tC = ((corners[i].x - u_camPos.x) * rayDir.x +
+                        (corners[i].y - u_camPos.y) * rayDir.y) / d2r;
+            tC = clamp(tC, tOrig, tEnd);
+            vec3  cp     = u_camPos + rayDir * tC;
+            float dist2d = length(cp.xy - corners[i]);
+            if (dist2d < ew && cp.z >= 0.0) {
+              float fade = 1.0 - dist2d / ew;
+              float cb = 0.45 * fade * (1.0 - fc.a);
+              fc.rgb = mix(fc.rgb, vec3(0.0, 0.85, 1.0), cb);
+              fc.a   = min(1.0, fc.a + cb * 0.3);
             }
           }
         }
@@ -586,6 +636,24 @@
     gl.useProgram(prog);
     gl.bindVertexArray(quadVAO);
 
+    // Smooth camera animation — lerp toward targets each frame
+    const lf = 0.12;
+    const dTgt = Math.hypot(
+      camTgt[0] - camTgtTarget[0],
+      camTgt[1] - camTgtTarget[1],
+      camTgt[2] - camTgtTarget[2]
+    );
+    const dDist = Math.abs(camDist - camDistTarget);
+    if (dTgt > 0.05 || dDist > 0.5) {
+      camTgt = [
+        camTgt[0] + (camTgtTarget[0] - camTgt[0]) * lf,
+        camTgt[1] + (camTgtTarget[1] - camTgt[1]) * lf,
+        camTgt[2] + (camTgtTarget[2] - camTgt[2]) * lf,
+      ];
+      camDist += (camDistTarget - camDist) * lf;
+      dirty = true;
+    }
+
     const { eye, fwd, right, up } = getCamVectors();
 
     // Compass: project world North (0,1,0) onto screen axes
@@ -714,6 +782,9 @@
   function onMouseDown(e: MouseEvent) {
     isDragging = true; isShiftDrag = e.shiftKey;
     lastMouse = [e.clientX, e.clientY];
+    // Snap targets to current state to stop any in-flight animation
+    camTgtTarget  = [...camTgt];
+    camDistTarget = camDist;
   }
   function onMouseMove(e: MouseEvent) {
     if (!isDragging) return;
@@ -728,6 +799,7 @@
         camTgt[1] + dx * sc * Math.sin(th),
         camTgt[2] + dy * sc,
       ];
+      camTgtTarget = [...camTgt];  // don't fight manual pan
     } else {
       camTheta += dx * 0.4;
       camPhi    = Math.max(-85, Math.min(89, camPhi - dy * 0.4));
@@ -739,6 +811,7 @@
     e.preventDefault();
     e.stopPropagation();
     camDist = Math.max(10, Math.min(5000, camDist * (1 + e.deltaY * 0.001)));
+    camDistTarget = camDist;  // don't fight manual zoom
     dirty = true;
   }
   function onKeyDown(e: KeyboardEvent) {
@@ -748,8 +821,8 @@
       case 'ArrowRight': camTheta += step; break;
       case 'ArrowUp':    camPhi = Math.min(89, camPhi + step); break;
       case 'ArrowDown':  camPhi = Math.max(-85, camPhi - step); break;
-      case '+': case '=': camDist = Math.max(10, camDist * 0.85); break;
-      case '-':           camDist = Math.min(5000, camDist * 1.15); break;
+      case '+': case '=': camDist = Math.max(10, camDist * 0.85); camDistTarget = camDist; break;
+      case '-':           camDist = Math.min(5000, camDist * 1.15); camDistTarget = camDist; break;
       case 'r': case 'R': resetCamera(); return;
       default: return;
     }
@@ -758,15 +831,33 @@
   }
 
   function resetCamera() {
-    camTheta = -30; camPhi = 25;
-    camDist  = volMaxRange * 1.8;
-    camTgt   = [0, 0, 0];
-    dirty    = true;
+    camTheta      = -30; camPhi = 25;
+    camDistTarget = volMaxRange * 1.8;
+    camTgtTarget  = [0, 0, 0];
+    dirty         = true;
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
-  $effect(() => { $selectedBox; dirty = true; });
+  $effect(() => {
+    const clip = $selectedBox;
+    dirty = true;
+    if (clip) {
+      camTgtTarget = [
+        (clip.xMin + clip.xMax) / 2 / 1000,
+        (clip.yMin + clip.yMax) / 2 / 1000,
+        0,
+      ];
+      camDistTarget = Math.max(50, Math.hypot(
+        (clip.xMax - clip.xMin) / 1000,
+        (clip.yMax - clip.yMin) / 1000,
+      ) * 2);
+      if (camPhi < 15) camPhi = 15;
+    } else {
+      camTgtTarget  = [0, 0, 0];
+      camDistTarget = volMaxRange * 1.8;
+    }
+  });
 
   onMount(() => {
     unsubData = wsManager.onMessage('sweep_data_ready', (entry: SweepDataEntry) => {
@@ -812,6 +903,12 @@
 
       <button class="reset-btn" onclick={resetCamera} title="Reset camera (R)">Reset</button>
       <button class="reset-btn" class:active={showTfe} onclick={() => showTfe = !showTfe} title="Transfer function editor">TF</button>
+
+      {#if $selectedBox}
+        {@const bw = Math.round(Math.abs($selectedBox.xMax - $selectedBox.xMin) / 1000)}
+        {@const bh = Math.round(Math.abs($selectedBox.yMax - $selectedBox.yMin) / 1000)}
+        <span class="clip-badge" title="Active clip region">{bw}×{bh} km</span>
+      {/if}
 
       {#if loadedSweeps.size > 0}
         <span class="sweep-count">{loadedSweeps.size}/{sweeps.length} sweeps</span>
@@ -950,6 +1047,18 @@
   }
   .reset-btn:hover { background: var(--accent-primary); color: white; border-color: var(--accent-primary); }
   .reset-btn.active { background: var(--accent-primary); color: white; border-color: var(--accent-primary); }
+
+  .clip-badge {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    color: rgb(0, 220, 255);
+    background: rgba(0, 220, 255, 0.1);
+    border: 1px solid rgba(0, 220, 255, 0.35);
+    border-radius: var(--radius-sm);
+    padding: 2px 7px;
+    white-space: nowrap;
+  }
 
   .tfe-panel {
     padding: var(--spacing-sm) var(--spacing-md);
