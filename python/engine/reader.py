@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Any
 
@@ -227,6 +228,11 @@ class RadarReader:
         self._dtree: xr.DataTree | None = None
         self._path: str | None = None
         self._format: str | None = None
+        # ARCO lazy-loading state
+        self._arco_session: Any = None
+        self._arco_scan_key: str | None = None
+        self._arco_sweep_names: list[str] = []
+        self._arco_loaded_sweeps: dict[int, xr.Dataset] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -344,15 +350,9 @@ class RadarReader:
     def open_arco_scan(self, station: str, scan_key: str) -> dict[str, Any]:
         """Open a VCP type from the NEXRAD ARCO icechunk store.
 
-        Parameters
-        ----------
-        station:
-            NEXRAD station ID, e.g. ``KLOT``
-        scan_key:
-            VCP type group key, e.g. ``VCP-12``
-
-        The icechunk store uses Rust-backed S3 I/O, so this is fully
-        synchronous — no asyncio conflicts with the websocket server loop.
+        Only sweep_0 is opened eagerly; all other sweeps are loaded on demand
+        when ``get_sweep_data`` is called for them. This reduces open latency
+        from 30–170 s (17 sequential S3 requests) to ~5–10 s (1 request).
         """
         try:
             import icechunk
@@ -365,17 +365,11 @@ class RadarReader:
         station_upper = station.upper()
         arco_bucket = "nexrad-arco"
         store_url = f"icechunk://{arco_bucket}/{station_upper}/{scan_key}"
-        logger.info("Opening ARCO %s %s", station_upper, scan_key)
+        logger.info("Opening ARCO %s %s (lazy mode)", station_upper, scan_key)
 
-        storage = icechunk.s3_storage(
-            bucket=arco_bucket,
-            prefix=station_upper,
-            region="us-east-1",
-            anonymous=True,
-        )
-        session = icechunk.Repository.open(storage).readonly_session("main")
+        from engine.cloud import _open_icechunk_session
+        session = _open_icechunk_session(station_upper)
 
-        # List sweep sub-groups (filter out arrays like latitude, longitude, etc.)
         root_zarr = zarr.open_group(session.store, mode="r")
         vcp_zarr = root_zarr[scan_key]
         sweep_names = sorted(
@@ -389,7 +383,6 @@ class RadarReader:
         lat: float | None = None
         lon: float | None = None
         alt: float | None = None
-        scan_time_str: str | None = None
         for coord_key, target in (("latitude", "lat"), ("longitude", "lon"), ("altitude", "alt")):
             if coord_key in vcp_zarr:
                 try:
@@ -403,35 +396,71 @@ class RadarReader:
                 except Exception:
                     pass
 
-        # Open each sweep lazily, select the most recent vcp_time index
-        sweep_dict: dict[str, xr.Dataset] = {}
+        # Read sweep metadata from zarr in-memory tree — instant, no extra S3 calls.
+        sweep_elevations: dict[str, float | None] = {}
+        sweep_variables: dict[str, list[str]] = {}
         for sweep_name in sweep_names:
-            ds = xr.open_dataset(
-                session.store,
-                engine="zarr",
-                group=f"{scan_key}/{sweep_name}",
-                consolidated=False,
-            )
-            if "vcp_time" in ds.dims:
-                # Grab scan time before collapsing the dimension
-                if scan_time_str is None and "time" in ds.coords:
+            sweep_zarr = vcp_zarr[sweep_name]
+            elev: float | None = None
+            for elev_key in ("sweep_fixed_angle", "fixed_angle"):
+                if elev_key in sweep_zarr:
                     try:
-                        t = ds["time"].values[-1]
-                        if hasattr(t, "__iter__"):
-                            t = t[0]
-                        scan_time_str = str(np.datetime64(t, "s"))
+                        elev = float(np.array(sweep_zarr[elev_key]).flat[0])
+                        break
                     except Exception:
                         pass
-                ds = ds.isel(vcp_time=-1, drop=True)
-            sweep_dict[sweep_name] = ds
+            if elev is None and "elevation" in sweep_zarr:
+                try:
+                    elev = float(sweep_zarr["elevation"][0, 0])
+                except Exception:
+                    pass
+            sweep_elevations[sweep_name] = elev
+            # Variable names come from zarr array metadata (in-memory, no S3 round-trip)
+            vars_in: list[str] = []
+            try:
+                for k in sweep_zarr.keys():
+                    m = sweep_zarr[k]
+                    if isinstance(m, zarr.Array) and m.ndim >= 2 and np.dtype(m.dtype).kind == "f":
+                        vars_in.append(k)
+            except Exception:
+                pass
+            sweep_variables[sweep_name] = sorted(
+                v for v in vars_in if not v.startswith("ray_") and v not in ("sweep_fixed_angle",)
+            )
 
-        dtree = xr.DataTree.from_dict(sweep_dict)
-        self._dtree = dtree
+        # Open ONLY sweep_0 fully — all other sweeps get placeholder Datasets
+        sweep0_group = f"{scan_key}/{sweep_names[0]}"
+        ds0 = xr.open_dataset(session.store, engine="zarr", group=sweep0_group, consolidated=False)
+        scan_time_str: str | None = None
+        if "vcp_time" in ds0.dims:
+            if "time" in ds0.coords:
+                try:
+                    t_scalar = ds0["time"].isel(vcp_time=-1).isel(azimuth=0).values
+                    scan_time_str = str(np.datetime64(t_scalar, "s"))
+                except Exception:
+                    pass
+            ds0 = _squeeze_vcp_time(ds0)
+
+        # Build DataTree: real Dataset for sweep_0, attrs-only placeholders for the rest
+        sweep_dict: dict[str, xr.Dataset] = {sweep_names[0]: ds0}
+        for sweep_name in sweep_names[1:]:
+            elev = sweep_elevations.get(sweep_name)
+            attrs: dict[str, Any] = {"_sweep_variables": sweep_variables.get(sweep_name, [])}
+            if elev is not None:
+                attrs["sweep_fixed_angle"] = elev
+            sweep_dict[sweep_name] = xr.Dataset(attrs=attrs)
+
+        self._dtree = xr.DataTree.from_dict(sweep_dict)
         self._path = store_url
         self._format = "nexrad_arco"
+        self._arco_session = session
+        self._arco_scan_key = scan_key
+        self._arco_sweep_names = sweep_names
+        self._arco_loaded_sweeps = {}
+
+        logger.info("ARCO %s %s opened (%d sweeps, lazy)", station_upper, scan_key, len(sweep_names))
 
         result = self.get_schema()
-        # Inject site coordinates extracted from VCP arrays
         if lat is not None:
             result["attributes"]["latitude"] = lat
         if lon is not None:
@@ -445,6 +474,25 @@ class RadarReader:
         result["vcp"] = scan_key
         result["station"] = station_upper
         return result
+
+    def _load_arco_sweep(self, sweep_idx: int) -> xr.Dataset:
+        """Load a single ARCO sweep on demand and cache it."""
+        if sweep_idx in self._arco_loaded_sweeps:
+            return self._arco_loaded_sweeps[sweep_idx]
+
+        sweep_name = self._arco_sweep_names[sweep_idx]
+        group = f"{self._arco_scan_key}/{sweep_name}"
+        logger.info("Lazy-loading ARCO sweep %d (%s)", sweep_idx, group)
+
+        ds = xr.open_dataset(
+            self._arco_session.store,
+            engine="zarr",
+            group=group,
+            consolidated=False,
+        )
+        ds = _squeeze_vcp_time(ds)
+        self._arco_loaded_sweeps[sweep_idx] = ds
+        return ds
 
     def get_schema(self) -> dict[str, Any]:
         """Extract metadata from the currently-open datatree.
@@ -464,41 +512,53 @@ class RadarReader:
         # "sweep_0", "sweep_1", etc.
         sweep_nodes = self._sweep_nodes()
 
-        # Extract variables and dimensions from first sweep only —
-        # they're identical across sweeps, so no need to materialise all 23.
-        # Only include actual radar moment variables (2D: azimuth x range),
-        # excluding scalar metadata like sweep_mode, sweep_number, etc.
+        # Extract variables and dimensions from first sweep.
+        # Only include actual radar moment variables (2D: azimuth x range).
         variables: set[str] = set()
         dimensions: dict[str, int] = {}
+        _ds0_cached: xr.Dataset | None = None
         if sweep_nodes:
-            ds0 = sweep_nodes[0].to_dataset()
-            for v in ds0.data_vars:
-                da = ds0[v]
-                # Radar moments are 2D (azimuth, range) float arrays
+            _ds0_cached = sweep_nodes[0].to_dataset()
+            for v in _ds0_cached.data_vars:
+                da = _ds0_cached[v]
                 if da.ndim == 2 and da.dtype.kind == "f":
                     variables.add(str(v))
-            for dim, size in ds0.sizes.items():
+            for dim, size in _ds0_cached.sizes.items():
                 dimensions[str(dim)] = int(size)
 
-        # Extract sweep elevations cheaply. sweep_fixed_angle can be:
-        # - a DataTree node attr, a Dataset attr, or a scalar data variable.
-        # We read the scalar without loading the full elevation array.
+        # Extract per-sweep elevation and variable lists.
+        # Placeholder ARCO sweeps store available variables in attrs["_sweep_variables"].
         sweeps: list[dict[str, Any]] = []
         for idx, node in enumerate(sweep_nodes):
             elevation: float | None = None
+            sweep_vars: list[str] | None = None
             try:
-                ds = node.to_dataset()
+                ds = _ds0_cached if idx == 0 and _ds0_cached is not None else node.to_dataset()
                 if "sweep_fixed_angle" in ds.attrs:
                     elevation = float(ds.attrs["sweep_fixed_angle"])
                 elif "sweep_fixed_angle" in ds:
-                    # Scalar variable — fast to read
                     elevation = float(ds["sweep_fixed_angle"].values)
                 elif "elevation" in ds:
-                    # Fallback: use first elevation value (avoid full array mean)
                     elevation = float(ds["elevation"].values.flat[0])
+                # Replace NaN/Inf with None so JSON.parse() doesn't reject the message
+                if elevation is not None and (math.isnan(elevation) or math.isinf(elevation)):
+                    elevation = None
+                # Per-sweep variable list: from real data_vars or stored attrs
+                if ds.data_vars:
+                    sweep_vars = sorted(
+                        str(v) for v in ds.data_vars
+                        if ds[v].ndim == 2 and ds[v].dtype.kind == "f"
+                    )
+                elif "_sweep_variables" in ds.attrs:
+                    sweep_vars = list(ds.attrs["_sweep_variables"])
             except Exception:
                 pass
-            sweeps.append({"index": idx, "elevation": elevation})
+            entry: dict[str, Any] = {"index": idx, "elevation": elevation}
+            if sweep_vars is not None:
+                entry["variables"] = sweep_vars
+                # Union into the top-level variable list
+                variables.update(sweep_vars)
+            sweeps.append(entry)
 
         # Global attributes — from root node
         root_attrs: dict[str, Any] = {}
@@ -594,6 +654,9 @@ class RadarReader:
         if sweep < 0 or sweep >= len(nodes):
             raise IndexError(f"Sweep index {sweep} out of range (0..{len(nodes) - 1})")
         ds = nodes[sweep].to_dataset()
+        # Placeholder ARCO sweeps have no data vars — load the real data on demand
+        if variable not in ds.data_vars and self._format == "nexrad_arco" and sweep < len(self._arco_sweep_names):
+            ds = self._load_arco_sweep(sweep)
         if variable not in ds.data_vars:
             available = sorted(str(v) for v in ds.data_vars)
             raise KeyError(f"Variable '{variable}' not in sweep {sweep}. Available: {available}")
@@ -622,12 +685,23 @@ class RadarReader:
         return nodes
 
 
+def _squeeze_vcp_time(ds: xr.Dataset) -> xr.Dataset:
+    """Select the last vcp_time index and drop the dimension if present."""
+    if "vcp_time" in ds.dims:
+        return ds.isel(vcp_time=-1, drop=True)
+    return ds
+
+
 def _serializable(value: Any) -> Any:
-    """Convert numpy types to plain Python for JSON serialization."""
-    if isinstance(value, (np.integer,)):
+    """Convert numpy types to plain Python for JSON serialization.
+
+    NaN and Inf are replaced with None because JSON.parse() rejects them.
+    """
+    if isinstance(value, np.integer):
         return int(value)
-    if isinstance(value, (np.floating,)):
-        return float(value)
+    if isinstance(value, (np.floating, float)):
+        v = float(value)
+        return None if (math.isnan(v) or math.isinf(v)) else v
     if isinstance(value, np.ndarray):
         return value.tolist()
     if isinstance(value, bytes):

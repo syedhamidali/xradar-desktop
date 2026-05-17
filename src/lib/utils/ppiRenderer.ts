@@ -159,19 +159,12 @@ const FRAGMENT_SHADER_SHARP = `
   uniform float u_vmin;
   uniform float u_vmax;
   uniform float u_nodata;
-  uniform vec3 u_bg;
-  uniform float u_bgAlpha;
-  uniform float u_transparentBg;
   uniform float u_vignetteIntensity;
   uniform float u_maxRange;
   uniform float u_transitionAlpha;
   void main() {
-    if (v_value <= u_nodata + 0.5) {
-      if (u_transparentBg > 0.5) {
-        gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
-      } else {
-        gl_FragColor = vec4(u_bg, u_bgAlpha);
-      }
+    if (v_value <= u_nodata + 0.5 || v_value < u_vmin) {
+      gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
       return;
     }
     float t = clamp((v_value - u_vmin) / (u_vmax - u_vmin), 0.0, 1.0);
@@ -215,9 +208,6 @@ const FRAGMENT_SHADER_SMOOTH = `
   uniform float u_vmin;
   uniform float u_vmax;
   uniform float u_nodata;
-  uniform vec3 u_bg;
-  uniform float u_bgAlpha;
-  uniform float u_transparentBg;
   uniform float u_vignetteIntensity;
   uniform float u_maxRange;
   uniform float u_transitionAlpha;
@@ -233,11 +223,7 @@ const FRAGMENT_SHADER_SMOOTH = `
     bool allNodata = (v_values4.x <= nd && v_values4.y <= nd &&
                       v_values4.z <= nd && v_values4.w <= nd);
     if (allNodata) {
-      if (u_transparentBg > 0.5) {
-        gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
-      } else {
-        gl_FragColor = vec4(u_bg, u_bgAlpha);
-      }
+      gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
       return;
     }
     // Replace nodata corners with average of valid corners
@@ -255,6 +241,10 @@ const FRAGMENT_SHADER_SMOOTH = `
     if (v.w <= nd) v.w = avg;
 
     float val = bilinear(v, v_polar);
+    if (val < u_vmin) {
+      gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+      return;
+    }
     float t = clamp((val - u_vmin) / (u_vmax - u_vmin), 0.0, 1.0);
     vec4 color = texture2D(u_colormap, vec2(t, 0.5));
     // Vignette
@@ -367,9 +357,6 @@ interface SharpLocs {
   uVmax: WebGLUniformLocation | null;
   uNodata: WebGLUniformLocation | null;
   uColormap: WebGLUniformLocation | null;
-  uBg: WebGLUniformLocation | null;
-  uBgAlpha: WebGLUniformLocation | null;
-  uTransparentBg: WebGLUniformLocation | null;
   uVignetteIntensity: WebGLUniformLocation | null;
   uMaxRange: WebGLUniformLocation | null;
   uTransitionAlpha: WebGLUniformLocation | null;
@@ -384,9 +371,6 @@ interface SmoothLocs {
   uVmax: WebGLUniformLocation | null;
   uNodata: WebGLUniformLocation | null;
   uColormap: WebGLUniformLocation | null;
-  uBg: WebGLUniformLocation | null;
-  uBgAlpha: WebGLUniformLocation | null;
-  uTransparentBg: WebGLUniformLocation | null;
   uVignetteIntensity: WebGLUniformLocation | null;
   uMaxRange: WebGLUniformLocation | null;
   uTransitionAlpha: WebGLUniformLocation | null;
@@ -516,9 +500,6 @@ export class PPIRenderer {
       uVmax: gl.getUniformLocation(sharpProg, 'u_vmax'),
       uNodata: gl.getUniformLocation(sharpProg, 'u_nodata'),
       uColormap: gl.getUniformLocation(sharpProg, 'u_colormap'),
-      uBg: gl.getUniformLocation(sharpProg, 'u_bg'),
-      uBgAlpha: gl.getUniformLocation(sharpProg, 'u_bgAlpha'),
-      uTransparentBg: gl.getUniformLocation(sharpProg, 'u_transparentBg'),
       uVignetteIntensity: gl.getUniformLocation(sharpProg, 'u_vignetteIntensity'),
       uMaxRange: gl.getUniformLocation(sharpProg, 'u_maxRange'),
       uTransitionAlpha: gl.getUniformLocation(sharpProg, 'u_transitionAlpha'),
@@ -537,9 +518,6 @@ export class PPIRenderer {
         uVmax: gl.getUniformLocation(smoothProg, 'u_vmax'),
         uNodata: gl.getUniformLocation(smoothProg, 'u_nodata'),
         uColormap: gl.getUniformLocation(smoothProg, 'u_colormap'),
-        uBg: gl.getUniformLocation(smoothProg, 'u_bg'),
-        uBgAlpha: gl.getUniformLocation(smoothProg, 'u_bgAlpha'),
-        uTransparentBg: gl.getUniformLocation(smoothProg, 'u_transparentBg'),
         uVignetteIntensity: gl.getUniformLocation(smoothProg, 'u_vignetteIntensity'),
         uMaxRange: gl.getUniformLocation(smoothProg, 'u_maxRange'),
         uTransitionAlpha: gl.getUniformLocation(smoothProg, 'u_transitionAlpha'),
@@ -962,8 +940,7 @@ export class PPIRenderer {
   private setCommonUniforms(
     gl: WebGLRenderingContext,
     locs: {
-      uBg: WebGLUniformLocation | null; uBgAlpha: WebGLUniformLocation | null;
-      uTransparentBg: WebGLUniformLocation | null; uVignetteIntensity: WebGLUniformLocation | null;
+      uVignetteIntensity: WebGLUniformLocation | null;
       uMaxRange: WebGLUniformLocation | null; uTransitionAlpha: WebGLUniformLocation | null;
       uVmin: WebGLUniformLocation | null; uVmax: WebGLUniformLocation | null;
       uNodata: WebGLUniformLocation | null; uColormap: WebGLUniformLocation | null;
@@ -978,9 +955,6 @@ export class PPIRenderer {
     gl.uniform1f(locs.uVmin, vmin);
     gl.uniform1f(locs.uVmax, vmax);
     gl.uniform1f(locs.uNodata, -9999);
-    gl.uniform3f(locs.uBg, 15 / 255, 15 / 255, 26 / 255);
-    gl.uniform1f(locs.uBgAlpha, this.transparentBg ? 0.0 : 1.0);
-    gl.uniform1f(locs.uTransparentBg, this.transparentBg ? 1.0 : 0.0);
     gl.uniform1f(locs.uVignetteIntensity, this.vignetteIntensity);
     gl.uniform1f(locs.uMaxRange, this.maxRange);
     gl.uniform1f(locs.uTransitionAlpha, alpha);

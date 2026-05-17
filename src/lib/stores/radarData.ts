@@ -3,6 +3,7 @@ import { writable } from 'svelte/store';
 export interface SweepInfo {
   index: number;
   elevation: number | null;
+  variables?: string[];
 }
 
 export interface RadarDataState {

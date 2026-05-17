@@ -162,7 +162,7 @@
     <!-- Real-time mode -->
     {#if mode === 'realtime'}
       <div class="cdp-section">
-        <p class="cdp-hint">Opens the most recent NEXRAD Level II scan from <code>noaa-nexrad-level2</code> on AWS S3.</p>
+        <p class="cdp-hint">Opens the most recent NEXRAD Level II scan from <code>unidata-nexrad-level2</code> on AWS S3.</p>
         <button class="cdp-btn primary full" on:click={openRealtime} disabled={!isConnected || isOpening || !selectedStation}>
           {isOpening ? 'Loading…' : `Open Latest ${selectedStation}`}
         </button>

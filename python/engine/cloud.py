@@ -12,7 +12,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_NEXRAD_L2_BUCKET = "noaa-nexrad-level2"
+_NEXRAD_L2_BUCKET = "unidata-nexrad-level2"
 _NEXRAD_ARCO_BUCKET = "nexrad-arco"
 
 
@@ -50,6 +50,7 @@ _NEXRAD_STATIONS = [
 ]
 
 _ARCO_STATIONS: set[str] | None = None
+_ARCO_REPOS: dict[str, Any] = {}  # station_upper → icechunk.Repository (cached)
 
 
 def list_nexrad_stations() -> list[dict[str, str]]:
@@ -130,22 +131,32 @@ def get_latest_nexrad_l2(station: str) -> dict[str, Any]:
 # ── NEXRAD ARCO (icechunk / Zarr v3) ─────────────────────────────────────────
 
 def _open_icechunk_session(station: str):
-    """Open a readonly icechunk session for a NEXRAD station."""
+    """Open a readonly icechunk session for a NEXRAD station.
+
+    The Repository object is cached per station so the expensive S3 manifest
+    download only happens once per process lifetime.  Each call still creates
+    a fresh readonly_session("main") so callers see the latest snapshot.
+    """
+    global _ARCO_REPOS
     try:
         import icechunk
     except ImportError as exc:
         raise RuntimeError("icechunk is required: pip install icechunk") from exc
-    storage = icechunk.s3_storage(
-        bucket=_NEXRAD_ARCO_BUCKET,
-        prefix=station.upper(),
-        region="us-east-1",
-        anonymous=True,
-    )
-    try:
-        repo = icechunk.Repository.open(storage)
-    except Exception as exc:
-        raise RuntimeError(f"Could not open ARCO store for {station}: {exc}") from exc
-    return repo.readonly_session("main")
+    station_upper = station.upper()
+    if station_upper not in _ARCO_REPOS:
+        storage = icechunk.s3_storage(
+            bucket=_NEXRAD_ARCO_BUCKET,
+            prefix=station_upper,
+            region="us-east-1",
+            anonymous=True,
+        )
+        try:
+            logger.info("Opening icechunk repository for %s (first time, may take ~30s)…", station_upper)
+            _ARCO_REPOS[station_upper] = icechunk.Repository.open(storage)
+            logger.info("icechunk repository for %s cached", station_upper)
+        except Exception as exc:
+            raise RuntimeError(f"Could not open ARCO store for {station}: {exc}") from exc
+    return _ARCO_REPOS[station_upper].readonly_session("main")
 
 
 def list_arco_scans(station: str, limit: int = 50) -> list[dict[str, Any]]:

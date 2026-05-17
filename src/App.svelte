@@ -20,7 +20,7 @@
   import Timeline from './lib/components/Timeline.svelte';
   import DiffViewer from './lib/components/DiffViewer.svelte';
   import CrossSectionPanel from './lib/components/CrossSectionPanel.svelte';
-  import { connectionStatus, radarData, selectedSweep, processingProgress } from './lib/stores/radarData';
+  import { connectionStatus, radarData, selectedSweep, selectedVariable, processingProgress } from './lib/stores/radarData';
   import { diffMode, toggleDiffMode } from './lib/stores/temporal';
   import { sidecarPort } from './lib/stores/settings';
   import { wsManager } from './lib/utils/websocket';
@@ -61,6 +61,7 @@
 
   // --- Non-reactive locals ---
   let unlistenDragDrop: (() => void) | null = null;
+  let unsubFileOpened: (() => void) | null = null;
   let animTimer: ReturnType<typeof setInterval> | null = null;
   let isResizingLeft = false;
   let isResizingRight = false;
@@ -93,6 +94,9 @@
     // Apply saved workspace on startup
     const wsConfig = workspaceStore.getCurrentConfig();
     applyWorkspace(wsConfig);
+
+    // Stop animation whenever any file (including cloud) finishes opening
+    unsubFileOpened = wsManager.onMessage('file_opened', () => stopAnimation());
 
     window.addEventListener('keydown', handleKeyDown);
     // Check for first-launch onboarding
@@ -127,9 +131,10 @@
     window.removeEventListener('keydown', handleKeyDown);
     stopAnimation();
     if (unlistenDragDrop) unlistenDragDrop();
+    unsubFileOpened?.();
   });
 
-  function handleKeyDown(e: KeyboardEvent) {
+  async function handleKeyDown(e: KeyboardEvent) {
     const ctrl = e.ctrlKey || e.metaKey;
     if (ctrl && e.key === 'k') {
       e.preventDefault();
@@ -154,6 +159,12 @@
     } else if (ctrl && e.shiftKey && e.key.toLowerCase() === 'a') {
       e.preventDefault();
       aboutDialogVisible = !aboutDialogVisible;
+    } else if (e.key === 'F12' || (e.altKey && ctrl && e.key.toLowerCase() === 'i')) {
+      e.preventDefault();
+      try {
+        const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+        getCurrentWebviewWindow().openDevtools();
+      } catch {}
     }
   }
 
@@ -195,6 +206,7 @@
   }
 
   function sendOpenFile(path: string) {
+    selectedVariable.set(null); // Clear before open so stale variable doesn't trigger a render on the old reader
     radarData.update((d) => ({ ...d, filePath: path }));
     selectedSweep.set(0);
     wsManager.openFile(path);

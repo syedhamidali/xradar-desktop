@@ -129,7 +129,17 @@
     // Subscribe to store changes for animation / external sweep updates
     unsubSweepStore = selectedSweep.subscribe((s) => {
       const v = $selectedVariable;
-      if (v) requestNewData(v, s);
+      if (!v) return;
+      // If the sweep has a known variable list and the current variable isn't in it,
+      // switch to DBZH (or first available) — handles multi-variable NEXRAD VCPs.
+      const sweepInfo = $radarData.sweeps.find((sw) => sw.index === s);
+      const available = sweepInfo?.variables;
+      if (available && available.length > 0 && !available.includes(v)) {
+        const fallback = available.includes('DBZH') ? 'DBZH' : available[0];
+        selectedVariable.set(fallback); // triggers unsubVarStore → requestNewData
+        return;
+      }
+      requestNewData(v, s);
     });
     unsubVarStore = selectedVariable.subscribe((v) => {
       if (v) requestNewData(v, $selectedSweep);
@@ -246,7 +256,8 @@
   function onSweepChange(e: Event) {
     const s = parseInt((e.target as HTMLSelectElement).value, 10);
     selectedSweep.set(s);
-    requestNewData(variable!, s);
+    // Don't call requestNewData here — the selectedSweep subscription handles it
+    // and does the variable compatibility check first.
   }
 
   function onWheel(e: WheelEvent) {

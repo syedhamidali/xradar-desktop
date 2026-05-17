@@ -108,7 +108,9 @@ class ConnectionHandler:
 
     async def send(self, msg: dict[str, Any]) -> None:
         try:
-            await self.ws.send(json.dumps(msg, default=_json_default))
+            await self.ws.send(json.dumps(msg, default=_json_default, allow_nan=False))
+        except ValueError as exc:
+            logger.error("JSON serialization error (NaN/Inf in message?): %s", exc)
         except websockets.exceptions.ConnectionClosed:
             logger.warning("Connection closed while sending message")
 
@@ -135,6 +137,7 @@ class ConnectionHandler:
             return
 
         if EXPECTED_SESSION_TOKEN and msg.get("token") != EXPECTED_SESSION_TOKEN:
+            logger.warning("Unauthorized message type=%s (token mismatch)", msg_type)
             await self.send_error("Unauthorized WebSocket message")
             return
 
@@ -497,7 +500,7 @@ class ConnectionHandler:
     # ── Cloud / AWS handlers ──────────────────────────────────────────────────
 
     async def _handle_list_nexrad_stations(self, msg: dict[str, Any]) -> None:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             stations = await loop.run_in_executor(None, list_nexrad_stations)
             await self.send({"type": "nexrad_stations", "stations": stations})
@@ -510,7 +513,7 @@ class ConnectionHandler:
         if not station or not date:
             await self.send_error("list_nexrad_l2_files: 'station' and 'date' required")
             return
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             files = await loop.run_in_executor(None, list_nexrad_l2_files, station, date)
             await self.send({"type": "nexrad_l2_files", "station": station, "date": date, "files": files})
@@ -523,19 +526,20 @@ class ConnectionHandler:
         if not s3_path:
             await self.send_error("open_nexrad_l2: 'path' required")
             return
-        await self.send_progress(5, f"Connecting to S3...")
-        loop = asyncio.get_event_loop()
-        try:
-            await self.send_progress(15, f"Downloading {s3_path.split('/')[-1]}...")
-            schema = await loop.run_in_executor(None, _shared_reader.open_s3_file, s3_path)
-            await self.send_progress(100, "Loaded")
-            file_id = str(uuid.uuid4())
-            _last_file_id = file_id
-            _store_datatree(_shared_reader._dtree, file_id)
-            schema_serial = {k: _serializable(v) for k, v in schema.items()}
-            await self.send({"type": "file_opened", "data": schema_serial, "file_id": file_id})
-        except Exception as exc:
-            await self.send_error(f"open_nexrad_l2 failed: {exc}")
+        await self.send_progress(5, "Connecting to S3...")
+        loop = asyncio.get_running_loop()
+        async with _mutation_lock:
+            try:
+                await self.send_progress(15, f"Downloading {s3_path.split('/')[-1]}...")
+                schema = await loop.run_in_executor(None, _shared_reader.open_s3_file, s3_path)
+                await self.send_progress(100, "Loaded")
+                file_id = str(uuid.uuid4())
+                _last_file_id = file_id
+                _file_readers[file_id] = _shared_reader
+                schema_serial = {k: _serializable(v) for k, v in schema.items()}
+                await self.send({"type": "file_opened", "data": schema_serial, "file_id": file_id})
+            except Exception as exc:
+                await self.send_error(f"open_nexrad_l2 failed: {exc}")
 
     async def _handle_open_nexrad_realtime(self, msg: dict[str, Any]) -> None:
         global _last_file_id
@@ -544,24 +548,25 @@ class ConnectionHandler:
             await self.send_error("open_nexrad_realtime: 'station' required")
             return
         await self.send_progress(5, f"Finding latest scan for {station}...")
-        loop = asyncio.get_event_loop()
-        try:
-            latest = await loop.run_in_executor(None, get_latest_nexrad_l2, station)
-            await self.send_progress(15, f"Downloading {latest['name']}...")
-            schema = await loop.run_in_executor(None, _shared_reader.open_s3_file, latest["path"])
-            await self.send_progress(100, "Loaded")
-            file_id = str(uuid.uuid4())
-            _last_file_id = file_id
-            _store_datatree(_shared_reader._dtree, file_id)
-            schema_serial = {k: _serializable(v) for k, v in schema.items()}
-            await self.send({"type": "file_opened", "data": schema_serial, "file_id": file_id})
-        except Exception as exc:
-            await self.send_error(f"open_nexrad_realtime failed: {exc}")
+        loop = asyncio.get_running_loop()
+        async with _mutation_lock:
+            try:
+                latest = await loop.run_in_executor(None, get_latest_nexrad_l2, station)
+                await self.send_progress(15, f"Downloading {latest['name']}...")
+                schema = await loop.run_in_executor(None, _shared_reader.open_s3_file, latest["path"])
+                await self.send_progress(100, "Loaded")
+                file_id = str(uuid.uuid4())
+                _last_file_id = file_id
+                _file_readers[file_id] = _shared_reader
+                schema_serial = {k: _serializable(v) for k, v in schema.items()}
+                await self.send({"type": "file_opened", "data": schema_serial, "file_id": file_id})
+            except Exception as exc:
+                await self.send_error(f"open_nexrad_realtime failed: {exc}")
 
     async def _handle_list_arco_scans(self, msg: dict[str, Any]) -> None:
         station = msg.get("station", "KLOT")
         limit = int(msg.get("limit", 50))
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             scans = await loop.run_in_executor(None, list_arco_scans, station, limit)
             await self.send({"type": "arco_scans", "station": station, "scans": scans})
@@ -575,18 +580,26 @@ class ConnectionHandler:
         if not station or not scan_key:
             await self.send_error("open_arco_scan: 'station' and 'scan_key' required")
             return
-        await self.send_progress(5, f"Opening ARCO scan {scan_key}...")
-        loop = asyncio.get_event_loop()
-        try:
-            schema = await loop.run_in_executor(None, _shared_reader.open_arco_scan, station, scan_key)
-            await self.send_progress(100, "Loaded")
-            file_id = str(uuid.uuid4())
-            _last_file_id = file_id
-            _store_datatree(_shared_reader._dtree, file_id)
-            schema_serial = {k: _serializable(v) for k, v in schema.items()}
-            await self.send({"type": "file_opened", "data": schema_serial, "file_id": file_id})
-        except Exception as exc:
-            await self.send_error(f"open_arco_scan failed: {exc}")
+        await self.send_progress(5, f"Connecting to ARCO store (first open ~30s, cached after)…")
+        loop = asyncio.get_running_loop()
+        async with _mutation_lock:
+            try:
+                schema = await asyncio.wait_for(
+                    loop.run_in_executor(None, _shared_reader.open_arco_scan, station, scan_key),
+                    timeout=120.0,
+                )
+                await self.send_progress(100, "Loaded")
+                file_id = str(uuid.uuid4())
+                _last_file_id = file_id
+                _file_readers[file_id] = _shared_reader
+                schema_serial = {k: _serializable(v) for k, v in schema.items()}
+                await self.send({"type": "file_opened", "data": schema_serial, "file_id": file_id})
+            except asyncio.TimeoutError:
+                await self.send_error(
+                    f"open_arco_scan timed out after 120s — the ARCO store may be slow or unavailable"
+                )
+            except Exception as exc:
+                await self.send_error(f"open_arco_scan failed: {exc}")
 
     async def _handle_open_file(self, msg: dict[str, Any]) -> None:
         global _last_file_id
@@ -1962,16 +1975,9 @@ async def _run_server(port: int) -> None:
 
 
 def _json_default(obj: Any) -> Any:
-    import numpy as np
-
-    if isinstance(obj, (np.integer,)):
-        return int(obj)
-    if isinstance(obj, (np.floating,)):
-        return float(obj)
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    if isinstance(obj, bytes):
-        return obj.decode("utf-8", errors="replace")
+    result = _serializable(obj)
+    if result is not obj:
+        return result
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 

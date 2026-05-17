@@ -250,48 +250,62 @@ class WebSocketManager {
     // Dispatch to built-in store handlers
     switch (type) {
       case 'file_opened': {
-        const vars: string[] = msg.data?.variables ?? [];
-        const swps = msg.data?.sweeps ?? [];
-        const fileId: string | undefined = msg.file_id;
-        const openedPath = this._pendingOpenPath ?? '';
-        this._pendingOpenPath = null;
+        try {
+          const vars: string[] = msg.data?.variables ?? [];
+          const swps = msg.data?.sweeps ?? [];
+          const dims = msg.data?.dimensions ?? {};
+          const attrs = msg.data?.attributes ?? {};
+          const fileId: string | undefined = msg.file_id;
+          const openedPath = this._pendingOpenPath ?? msg.data?.source ?? '';
+          this._pendingOpenPath = null;
 
-        processingProgress.set(null);
-        clearSweepCache();
-        radarData.update((state) => ({
-          ...state,
-          variables: vars,
-          dimensions: msg.data?.dimensions ?? {},
-          attributes: msg.data?.attributes ?? {},
-          sweeps: swps,
-          filePath: openedPath || state.filePath,
-        }));
+          processingProgress.set(null);
+          clearSweepCache();
 
-        const firstVar = vars.length > 0 ? vars[0] : null;
-        const firstSweep = swps.length > 0 ? swps[0].index : 0;
+          const firstVar = vars.length > 0 ? vars[0] : null;
+          const firstSweep = swps.length > 0 ? swps[0].index : 0;
 
-        // Register in the multi-file manager if we got a file_id
-        if (fileId && openedPath) {
-          const filename = openedPath.split('/').pop() ?? openedPath;
-          const entry: FileEntry = {
-            id: fileId,
-            path: openedPath,
-            filename,
-            variables: vars,
-            sweeps: swps,
-            dimensions: msg.data?.dimensions ?? {},
-            attributes: msg.data?.attributes ?? {},
-            selectedVariable: firstVar,
-            selectedSweep: firstSweep,
-          };
-          addFile(entry);
-        }
-
-        if (firstVar) {
-          selectedVariable.set(firstVar);
+          // Clear variable first so no stale render fires while stores are updating
+          selectedVariable.set(null);
           selectedSweep.set(firstSweep);
-          addToast('success', `Loaded ${vars.length} variables, ${swps.length} sweeps`);
-          this.requestSweepData(firstVar, firstSweep);
+
+          radarData.update((state) => ({
+            ...state,
+            variables: vars,
+            dimensions: dims,
+            attributes: attrs,
+            sweeps: swps,
+            filePath: openedPath || state.filePath,
+          }));
+
+          // Register in the multi-file manager if we got a file_id
+          if (fileId && openedPath) {
+            const filename = openedPath.split('/').pop() ?? openedPath;
+            const entry: FileEntry = {
+              id: fileId,
+              path: openedPath,
+              filename,
+              variables: vars,
+              sweeps: swps,
+              dimensions: dims,
+              attributes: attrs,
+              selectedVariable: firstVar,
+              selectedSweep: firstSweep,
+            };
+            addFile(entry);
+          }
+
+          if (firstVar) {
+            // Set variable last — unsubVarStore fires here with sweep already at firstSweep
+            selectedVariable.set(firstVar);
+            addToast('success', `Loaded ${vars.length} variables, ${swps.length} sweeps`);
+            this.requestSweepData(firstVar, firstSweep);
+          } else {
+            console.warn('[WS] file_opened: no variables in schema', msg.data);
+          }
+        } catch (err) {
+          console.error('[WS] file_opened handler error:', err);
+          addToast('error', `Failed to process opened file: ${err}`);
         }
         break;
       }
@@ -519,10 +533,16 @@ class WebSocketManager {
    * Skips if the data is already cached or a request is in flight.
    */
   private prefetchAdjacentSweeps(variable: string, currentSweep: number): void {
-    const totalSweeps = get(radarData).sweeps.length;
+    const sweepList = get(radarData).sweeps;
+    const totalSweeps = sweepList.length;
     const adjacent = [currentSweep - 1, currentSweep + 1];
     for (const s of adjacent) {
       if (s < 0 || s >= totalSweeps) continue;
+
+      // Skip if this sweep's variable list is known and doesn't include the variable
+      const sweepInfo = sweepList.find((sw) => sw.index === s);
+      if (sweepInfo?.variables && sweepInfo.variables.length > 0 && !sweepInfo.variables.includes(variable)) continue;
+
       const key = `${variable}:${s}`;
 
       // Already cached or in-flight — skip
@@ -576,6 +596,12 @@ class WebSocketManager {
       payloadMessage.token = token;
     }
 
+    // Re-check after async gap — connection may have changed
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn('[WS] WebSocket closed while preparing send. Message type:', message.type);
+      return;
+    }
+
     const activeFile = getActiveFile();
     const needsActiveFile =
       activeFile &&
@@ -592,7 +618,11 @@ class WebSocketManager {
     }
 
     const payload = JSON.stringify(payloadMessage);
-    this.ws.send(payload);
+    try {
+      this.ws.send(payload);
+    } catch (err) {
+      console.error('[WS] send() failed for type', message.type, ':', err);
+    }
   }
 
   /**
